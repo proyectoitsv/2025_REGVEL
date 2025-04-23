@@ -1,3 +1,8 @@
+#ARCHIVO PARA DEVOLUCIONES
 
+## Reunión 23/4/2025
 
-ARCHIVO PARA DEVOLUCIONES 
+* Los graficos de las estadísticas que tienen no los coloquen sueltos. Es mas rico para el proceso que busquen generar contenido propio a partir de esos números.
+* Hay un grafico donde comparan paises. Sería bueno llevar esos numeros a cantidad cada x cantidad de habitantes. Eso permite una comparación mas clara (https://es.wikipedia.org/wiki/Anexo:Pa%C3%ADses_por_tasa_de_muertes_por_siniestros_de_tr%C3%A1nsito)
+* Hagan una encuesta propia. Los datos que tienen son macros. Hace falta info generadad por ustedes que le de contexto local.
+* hacer foco en como la velocidad aumenta la mortalidad. Ese es el punto sobre el que se apoya el proyecto de ustedes

@@ -6,3 +6,40 @@
 * Hay un grafico donde comparan paises. Sería bueno llevar esos numeros a cantidad cada x cantidad de habitantes. Eso permite una comparación mas clara (https://es.wikipedia.org/wiki/Anexo:Pa%C3%ADses_por_tasa_de_muertes_por_siniestros_de_tr%C3%A1nsito)
 * Hagan una encuesta propia. Los datos que tienen son macros. Hace falta info generadad por ustedes que le de contexto local.
 * hacer foco en como la velocidad aumenta la mortalidad. Ese es el punto sobre el que se apoya el proyecto de ustedes
+
+
+## Presentación 25/04/2025
+
+* Soltarse un poco, proyectar la voz.
+* La presentación tiene que ayudarles a ustedes tambien. La comunicación debe ser la suma de lo que está en las slides y lo que dice quien habla.
+* Solo texto complica para quien ve, como para quien la dá la presentación.
+* Cuando se sentraron en los datos, se soltaron un poco mas. No obstante no hace falta exlicar todos los datos que se muestran en el grafico. Es lo mismo que leer una presentación en texto. En el grafico de muerte vs velocidad, con plantear un par de puntos el grafico ya se explica solo.
+* Ensayar para ajustarse a los tiempos.
+* No ponerse delante de la pantalla.
+* Elegir colores adecuados y tamaños de cosas para la presentación.
+* Tiempo >22 min
+* Ojo luces de freno al desacelerar.
+* nosotros hacemos prototipos, no proudctos.
+
+
+Positivos
+
+* Presentación clara a nivel problema.
+* Problema real con datos son muy interesantes.
+
+
+
+Negativos 
+
+* Lo ven como una tecnología muy complicada de implementar (diferencias entre marcas).
+* Organización y forma de referirse a todo el grupo.
+* Muchos datos en las slides y no se podía entender.
+* LOs Diagramas no se veían bien.
+* No había coherencia de colores.
+
+
+Inversor.
+
+* Ojo con los datos. aparecen incoherencias.
+* No está claro el público objetivo.
+* Muchos datos técnicos.

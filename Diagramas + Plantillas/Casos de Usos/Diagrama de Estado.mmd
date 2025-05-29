@@ -1,0 +1,29 @@
+sequenceDiagram
+  participant Conductor as Conductor
+  participant SistemaControl as SistemaControl
+  participant GPS as GPS
+  participant Velocímetro as Velocímetro
+  participant Limitador as Limitador
+
+  loop Cada segundo
+    SistemaControl ->> Velocímetro: Solicitar velocidad
+    Velocímetro -->> SistemaControl: Velocidad actual (km/h)
+    SistemaControl ->> GPS: Solicitar ubicación
+    GPS -->> SistemaControl: Coordenadas + Tipo de vía
+    alt Tipo de vía reconocido
+      SistemaControl ->> SistemaControl: Calcular límite (40/60/110/130)
+    else Tipo desconocido
+      SistemaControl ->> SistemaControl: Usar límite predeterminado (40 km/h)
+    end
+    SistemaControl ->> SistemaControl: Comparar: velocidad vs límite
+    alt Velocidad > Límite
+      SistemaControl ->> Limitador: Activar()
+      SistemaControl ->> Conductor: Accionar el limite de Velocidad
+      Limitador -->> SistemaControl: Confirmación activación
+    else
+      SistemaControl ->> Limitador: Desactivar()
+      SistemaControl ->> Conductor: Detener el limitador de Velocidad
+    end
+  end
+
+

@@ -1,0 +1,24 @@
+flowchart TD
+    actor(["Conductor"]) ---> uc6(["Notificar Estado"])
+    actor_vel(["Velocímetro"]) --> uc1("Monitorear Velocidad")
+    actor_gps(["Sistema GPS"]) --> uc2("Identificar Tipo de Vía")
+    actor_lim(["Limitador"]) --> uc5("Controlar Limitador")
+    uc1 --> uc4("Comparar Velocidades")
+    uc2 --> uc3("Determinar Límite")
+    uc3 --> uc4
+    uc4 --> uc5 & uc6
+
+     actor:::actor
+     uc6:::usecase
+     actor_vel:::actor
+     uc1:::usecase
+     actor_gps:::actor
+     uc2:::usecase
+     actor_lim:::actor
+     uc5:::usecase
+     uc4:::usecase 
+     uc3:::usecase
+    classDef actor fill:#9dd,stroke:#333,stroke-width:2px
+    classDef usecase fill:#dd9,stroke:#006,stroke-width:2px
+
+

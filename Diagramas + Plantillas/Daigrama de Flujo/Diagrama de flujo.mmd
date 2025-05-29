@@ -1,0 +1,21 @@
+---
+config:
+  layout: fixed
+  theme: dark
+  look: classic
+---
+flowchart TD
+    A["Iniciar"] --> B["Leer GPS"]
+    B --> C["Leer Velocimetro"]
+    C --> D["Leer limites de la zona"]
+    D --> E{"¿señal de velocimetro > Limite MAX Zona? (vel Auto > Zona)"}
+    E -- SI --> F["Activación de actuador segun la velocidad de la zona"]
+    F --> G["Reducir 5% de la Máxima"]
+    G --> H["Fin"]
+    E -- NO --> I{"¿Señal de velocimetro > vel Min zona (vel auto > vel min zona)?"}
+    I -- NO --> J["Alarma Sonora"]
+    J --> K["Seguir"]
+    K --> H
+    I -- SI --> L{"¿Velocidad dentro de los limites?"}
+    L -- SI --> K
+    L -- NO --> J

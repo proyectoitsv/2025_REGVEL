@@ -1,5 +1,23 @@
 #ARCHIVO PARA DEVOLUCIONES
 
+## Entrega final anteproyecto 28/5/25
+
+El trabajo tiene muchisimos datos, creo que la recopilación de información ha sido muy buena. Incluso me ha gustado que se planteen conclusiones que ustedes han generado  (algunas surgieron de nuestras charlas y otras generadas por ustedes). Creo que ha mejorado mucho en relación a la ultima vez que lo ví.
+
+A partir de esta mejora planteo un par de cosas que entiendo deben agregar. No para que lo hagan ahora sino cuando tengan el informaa final.
+
+1) Pensar en un orden global para la información. Tal vez haya algunas opociones para organizar mejor la data qu tienen.
+2) Hay un punto que no lo ví y que vincula la velocidad con las consecuencias de un accidente. La energía es la masa x el cuadrado de la velocidad. Ante un impacto esa energía debe disiparse en algun lado, generalmente es en daños sobre el vehiculo y todo lo que va dentro.
+3) Otra cosa importante de plantear es porque nadie hace esto? Es decir porque a nivel mundial no se plantea limitar la velocidad? donde están los intereses? Quien maneja o decde esto?
+4) Si bien hay mucha informacón, tambíen vimos que se repite un poco.
+5) Finalmente nos parece que podrían haber agregado información visual del poryecto (diagramas, render, gráficos)
+
+
+
+
+
+
+
 ## Reunión 23/4/2025
 
 * Los graficos de las estadísticas que tienen no los coloquen sueltos. Es mas rico para el proceso que busquen generar contenido propio a partir de esos números.

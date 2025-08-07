@@ -98,26 +98,29 @@ c. Preferencias de interfaz de usuario
 - Módulo de control del acelerador
 
 ### Flujo De Operación:
+    [Uploading Diagrama ---
+    config:
+      layout: fixed
+      theme: dark
+      look: classic
+    ---
+    flowchart TD
+        A["Iniciar"] --> B["Leer GPS"]
+        B --> C["Leer Velocimetro"]
+        C --> D["Leer limites de la zona"]
+        D --> E{"¿señal de velocimetro > Limite MAX Zona? (vel Auto > Zona)"}
+        E -- SI --> F["Activación de actuador segun la velocidad de la zona"]
+        F --> G["Reducir 5% de la Máxima"]
+        G --> H["Fin"]
+        E -- NO --> I{"¿Señal de velocimetro > vel Min zona (vel auto > vel min zona)?"}
+        I -- NO --> J["Alarma Sonora"]
+        J --> K["Seguir"]
+        K --> H
+        I -- SI --> L{"¿Velocidad dentro de los limites?"}
+        L -- SI --> K
+        L -- NO --> J
+    de flujo.mmd…]()
 
-    graph TD
-
-    A[Inicio] --> B[Lectura GPS]
-    B --> C{Identificar tipo de vía}
-    C -->|Calle| D[Límite: 40 km/h]
-    C -->|Avenida| E[Límite: 60 km/h]
-    C -->|Ruta| F[Límite: 110 km/h]
-    C -->|Auto-pista| G[Límite: 130 km/h]
-    D --> H[Lectura sensor velocidad]
-    E --> H
-    F --> H
-    G --> H
-    H --> I{Comparar velocidades}
-    I -->|Velocidad > Límite| J[Activar limitador]
-    I -->|Velocidad <= Límite| K[Mantener operación normal]
-    J --> L[Registrar evento]
-    K --> L
-    L --> M[Actualizar pantalla]
-    M --> B
 
 
 Equipo REGVEL · Instituto Tecnológico Salesiano Villada · 2025

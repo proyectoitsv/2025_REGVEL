@@ -1,126 +1,172 @@
-# 2025_REGVEL
-## Sistema de Limitación de Velocidad Adaptativa (REGVEL) 🚗
+# RegVel — Regulador de Velocidad Automático 🚗💨
 
-![Imagen GitHub](https://github.com/user-attachments/assets/28d50548-7fde-4362-b549-a6ad07e272d7)
+**Resumen breve**\
+RegVel es un sistema inteligente diseñado para limitar automáticamente la velocidad de un vehículo según la zona de circulación (calle, avenida, ruta, autopista) con el objetivo de reducir accidentes de tránsito en Argentina.
 
+---
 
+## Tabla de contenidos
 
-## Introducción 📍
-REGVEL es un sistema inteligente de limitación de velocidad vehicular que adapta automáticamente los límites de velocidad según la zona de circulación. Mediante la integración de sensores de velocidad y tecnología GPS, el sistema:
+- [Visión general](#visión-general)
+- [Problema y estadísticas](#problema-y-estadísticas)
+- [Solución propuesta](#solución-propuesta)
+- [Estructura del repositorio](#estructura-del-repositorio)
+- [Requisitos de hardware y diseño del sistema](#requisitos-de-hardware-y-diseño-del-sistema)
+- [Flujo de operación (resumen)](#flujo-de-operación-resumen)
+- [Fases de implementación](#fases-de-implementación)
+- [Desafíos y consideraciones](#desafíos-y-consideraciones)
+- [Marco legal](#marco-legal)
+- [Resultados de la encuesta](#resultados-de-la-encuesta)
+- [Equipo](#equipo)
+- [Documentación disponible](#documentación-disponible)
+- [Contribuir](#contribuir)
+- [Licencia](#licencia)
 
-Detecta en tiempo real la ubicación del vehículo
+---
 
-Identifica el tipo de vía (calle, avenida, ruta o auto-pista)
+## Visión general
 
-Compara la velocidad actual con el límite permitido
+**Objetivo:** reducir accidentes por exceso de velocidad mediante un limitador automático que se adapta al tipo de vía detectado por GPS y otros sensores.
 
-Actúa para prevenir excesos de velocidad
+---
 
-### Límites de velocidad implementados:
+## Problema y estadísticas
 
-🏙️ Calles: 40 km/h
+- **Muertes (Argentina, 2023):** 4.486.
+- **Porcentaje de siniestros por exceso de velocidad:** 31% (2023).
+- **Regla de riesgo:** cada aumento de 1 km/h incrementa los accidentes en \~3%.
 
-🛣️ Avenidas: 60 km/h
+---
 
-🚧 Rutas: 110 km/h
+## Solución propuesta
 
-🛣️ Auto-pistas: 130 km/h
+RegVel utiliza posicionamiento por GPS junto con sensores de velocidad y un actuador para limitar la aceleración cuando la velocidad del vehículo supera el límite definido según el tipo de vía. Los límites considerados en el diseño son:
 
-### Características Clave 🔑
-#### ___ Módulo _______ | ______ Tecnología __________ | ____ Función Principal
+- Calle: **40 km/h**.
+- Avenida: **60 km/h**.
+- Ruta: **110 km/h**.
+- Autopista: **130 km/h**.
 
-Posicionamiento __ | _ GPS _______________________ | __ Identificación precisa de ubicación y tipo de vía
+---
 
-Monitoreo ________ | _ Sensores de velocidad ____ | __ Medición en tiempo real de velocidad vehicular
+## Estructura del repositorio
 
-Control ___________ | _ Unidad de procesamiento _ | __ Comparación velocidad actual vs. límite permitido
+```plaintext
+RegVel/
+├── docs/
+│   ├── PROYECTO_REG_VEL.pdf
+│   ├── REGVEL_Requisitos.pdf
+│   └── Encuesta.pdf
+├── diagrams/
+│   ├── Diagrama_de_Bloques.pdf
+│   ├── sequence_diagram.jpg
+│   └── Gantt.xlsx
+├── src/                # Código / VHDL (si disponible)
+└── presentation/
+    └── REGVEL.pptx
+```
 
-Interfaz ___________ | _ Pantalla + alertas __________ | __ Visualización de datos y alertas al conductor
+---
 
-### Estructura del Repositorio 📂
+## Requisitos de hardware y diseño del sistema
 
-2025_REGVEL/
+**Componentes principales identificados:**
 
-├── documentación/            # Carpeta principal de documentos
+| Componente      | Tecnología / Ejemplo        | Funcín principal                                  |
+| --------------- | --------------------------- | ------------------------------------------------- |
+| Posicionamiento | GPS (ej. U-blox NEO-6M)     | Detectar ubicación y tipo de vía en tiempo real.  |
+| Monitoreo       | Sensor de velocidad (Hall)  | Medir la velocidad actual del vehículo.           |
+| Control         | Raspberry Pi / Arduino Mega | Comparar velocidad vs. límite, decidir acción.    |
+| Actuador        | Controlador del acelerador  | Reducir la entrada de aceleración si corresponde. |
+| Interfaz        | Pantalla y alertas sonoras  | Notificar al conductor; mostrar datos.            |
 
-│   ├── anteproyecto/         # Documento inicial del proyecto
+**Diagrama de bloques**\
+En la documentación se incluye un diagrama de bloques y flujo que muestra: GPS → Comparador de Velocidad → Actuador.
 
-│   ├── diagramas/            # Diagramas técnicos
+---
 
-│   │   ├── bloques.md        # Diagrama de bloques del sistema
+## Flujo de operación (resumen)
 
-│   │   ├── flujo.png         # Diagrama de flujo del proceso
+1. Lectura periódica del GPS para determinar ubicación y tipo de vía.
+2. Lectura del sensor de velocidad del vehículo.
+3. Comparación: si `velocidad_actual > límite_zona` → activar limitador (actuador).
+4. Registro del evento y notificación al conductor.
 
-│   │   └── gantt.pdf         # Cronograma de implementación
+---
 
-│   ├── encuestas/            # Resultados de investigación
+## Fases de implementación
 
-│   │   └── resultados.xlsx   # Datos estadísticos de encuestas
+1. **Piloto en Córdoba** — validar el sistema en condiciones reales y recoger datos de aceptación.
+2. **Cumplimiento regulatorio** — adaptar el sistema a la Ley 24.449 y normativas locales.
+3. **Escalabilidad** — asegurar compatibilidad con distintos modelos de vehículos, incluyendo vehículos antiguos.
 
-│   └── presentación/         # Materiales de presentación
+---
 
-│       └── regvel_slides.pptx
+## Desafíos y consideraciones
 
-├── src/                      # Código fuente (si aplica)
+- **Precisión del GPS** en zonas urbanas con interferencias/sombrado urbano.
+- **Ciberseguridad**: proteger la integración con la ECU y evitar manipulaciones maliciosas.
+- **Casos especiales**: adelantamientos, control de crucero, situaciones de emergencia (mecanismo de inhibición disponible al usuario según diseño).
 
-├── LICENSE
+---
 
-└── README.md                 # Este archivo
+## Marco legal
 
-### Documentación Técnica 📄
+- Ley de tránsito de referencia: **Ley 24.449** (se menciona como base para el diseño y cumplimiento normativo).
+- Límites considerados: urbano 40 km/h, rural 110 km/h, autopista 130 km/h.
 
-- Diagramas Disponibles
+---
 
-1. Diagrama de Bloques: Arquitectura del sistema
+## Resultados de la encuesta
 
-2. Diagrama de Flujo: Lógica de control de velocidad
+- **50%** de los conductores reportados exceden los límites de velocidad.
+- **70%** de las víctimas fatales son hombres entre 15–34 años (según la muestra).
 
-3. Diagrama de Gantt: Cronograma de implementación
+---
 
-4. Diagramas Eléctricos: Conexiones de sensores y actuadores
+## Equipo
 
-- Resultados de Encuesta
+| Rol        | Nombre            |
+| ---------- | ----------------- |
+| Estudiante | Julian Homola     |
+| Estudiante | Fabrizio Marrone  |
+| Estudiante | Pedro Zamora      |
+| Asesor     | Marcos Remedi     |
+| Asesor     | Federico Ferraro  |
+| Asesor     | Matias Schulthess |
 
-a. Análisis de necesidades de conductores
+---
 
-b. Datos sobre excesos de velocidad por tipo de vía
+## Documentación disponible
 
-c. Preferencias de interfaz de usuario
+Carpeta `docs/` con los archivos principales:
 
-### Hardware:
+- `PROYECTO_REG_VEL.pdf` — Informe completo (problema, estadísticas, marco legal).
+- `REGVEL_Requisitos.pdf` — Requisitos y especificaciones del sistema.
+- `Encuesta.pdf` — Datos y resultados de la encuesta.
 
-- Módulo GPS (ej: U-blox NEO-6M)
+Diagrama de bloques y flujo: ver `diagrams/Diagrama_de_Bloques.pdf`.
 
-- Sensor de velocidad (ej: Hall Effect Sensor)
+---
 
-- Unidad de procesamiento (Raspberry Pi/Arduino)
+## Contribuir
 
-- Módulo de control del acelerador
+Si deseas colaborar:
 
-### Flujo De Operación:
-    [Uploading Diagrama ---
-    config:
-      layout: fixed
-      theme: dark
-      look: classic
-    ---
-    flowchart TD
-        A["Iniciar"] --> B["Leer GPS"]
-        B --> C["Leer Velocimetro"]
-        C --> D["Leer limites de la zona"]
-        D --> E{"¿señal de velocimetro > Limite MAX Zona? (vel Auto > Zona)"}
-        E -- SI --> F["Activación de actuador segun la velocidad de la zona"]
-        F --> G["Reducir 5% de la Máxima"]
-        G --> H["Fin"]
-        E -- NO --> I{"¿Señal de velocimetro > vel Min zona (vel auto > vel min zona)?"}
-        I -- NO --> J["Alarma Sonora"]
-        J --> K["Seguir"]
-        K --> H
-        I -- SI --> L{"¿Velocidad dentro de los limites?"}
-        L -- SI --> K
-        L -- NO --> J
-    de flujo.mmd…]()
+1. Abre un *issue* describiendo la mejora o fallo.
+2. Crea un *fork* y envía un *pull request* con tu cambio (explica el objetivo y pruebas realizadas).
 
+Nota: antes de implementar cambios en `src/` consulta los documentos de requisitos y el diagrama de bloques para mantener consistencia con el diseño propuesto.
 
+---
 
-Equipo REGVEL · Instituto Tecnológico Salesiano Villada · 2025
+## Licencia
+
+No se especificó una licencia en la documentación entregada. Añade un archivo `LICENSE` al repositorio con la licencia preferida (por ejemplo MIT, Apache-2.0, etc.) o indica la política de uso/cesión de derechos.
+
+---
+
+## Notas finales
+
+Este README resume y organiza la documentación base provista para el proyecto **RegVel**. Los documentos fuente (informes, diagramas y la presentación) están en las carpetas listadas arriba; revisa `docs/` y `diagrams/` para los detalles técnicos y anexos.
+

@@ -1,514 +1,587 @@
-/*
-  Modulo3_GPS_Bluetooth_Map.ino
-  Módulo de prueba (Core 0) - GPS (NMEA) + Bluetooth SPP + Mapa CSV + decisión de límite + comunicación entre cores
+/* ===========================================================================
+   SISTEMA_BLUETOOTH_INALAMBRICO.ino - ESP32 + HC-06 (Sin cables)
+   Comunicación totalmente inalámbrica por Bluetooth
+   =========================================================================== */
 
-  Requisitos y características:
-  - Funciones públicas y firmas compatibles con proyecto: gps_init(), gps_process_serial(), map_load_from_spiffs(),
-    map_find_nearest_zone(), decide_speed_limit_and_send(), bluetooth_init(), intercore_send_msg()
-  - Autocontenible: puede compilarse y probarse solo. Si no hay GPS físico, acepta NMEA por monitor serie.
-  - Incluye implementación mínima de parseo NMEA (GPRMC / GPGGA) para obtener lat/lon y fix.
-  - Mapas: carga desde SPIFFS (si listado disponible) o usa un mapa embebido de ejemplo (array de zonas).
-  - Comunicación inter-core: stub intercore_send_msg() que imprime por Serial o envía por Serial1 a otro ESP; en producción reemplazar por cola FreeRTOS.
-  - Bluetooth: inicializa Bluetooth Classic SPP (BluetoothSerial). Permite enviar información de posición y recibir comandos simples.
-  - Ejemplos de comandos por Serial (monitor):
-      - "GPS <raw_nmea_line>" -> inyecta NMEA para debug
-      - "LISTMAP" -> imprime mapa cargado
-      - "LOADMAP" -> intenta cargar mapa desde SPIFFS
-      - "TESTSEND" -> fuerza decisión y envío de mensaje inter-core
-  - NOTA: Este sketch asume que el GPS está en Serial1 (TX1/RX1). Ajustar pins y baud si necesitás otro puerto.
-*/
+#include <BluetoothSerial.h>
+#include <TinyGPSPlus.h>
 
-#include <Arduino.h>
-#include "BluetoothSerial.h"
-#include "SPIFFS.h"    // opcional: para cargar mapa CSV desde filesystem
+// ============================================================================
+// CONFIGURACIÓN BLUETOOTH INALÁMBRICO
+// ============================================================================
 
-// --------------------------- Configuración de pines / puertos ---------------------------
-#define GPS_SERIAL Serial1
-#define GPS_RX_PIN 16    // RX1 pin (a TX del módulo GPS)
-#define GPS_TX_PIN 17    // TX1 pin (a RX del módulo GPS)
-#define GPS_BAUD 9600
+// Configuración Bluetooth - TOTALMENTE INALÁMBRICO
+const char* BT_DEVICE_NAME = "ESP32_GPS_Mapa";
+const char* HC06_MAC_STR = "00:22:09:01:2C:9E";  // REEMPLAZA con MAC real del HC-06
+const char* HC06_PIN = "1234";
+uint8_t HC06_MAC[6];
 
-BluetoothSerial SerialBT; // Bluetooth SPP
+// Configuración GPS
+#define HDOP_MAX 5.0
 
-// --------------------------- Tipos y estructuras ---------------------------
-struct GPSFix {
-  bool valid;
-  double lat;    // grados decimales (positivo norte)
-  double lon;    // grados decimales (positivo este)
-  float speed_knots; // si disponible
-  unsigned long timestamp_ms;
+// Configuración FreeRTOS
+#define GPS_TASK_STACK_SIZE 8192
+#define MOTOR_TASK_STACK_SIZE 4096
+#define TASK_PRIORITY 1
+
+// Pines
+#define LED_BUILTIN 2
+
+// ============================================================================
+// ESTRUCTURAS
+// ============================================================================
+
+struct GpsFix {
+  double lat;
+  double lon;
+  float speedKph;
+  float courseDeg;
+  float hdop;
 };
 
-struct MapZone {
-  // Zona simple definida como rectángulo geográfico para pruebas (lat_min, lat_max, lon_min, lon_max)
-  // En aplicación real usar polígonos o radios circulares.
-  double lat_min;
-  double lat_max;
-  double lon_min;
-  double lon_max;
-  uint16_t speed_limit_kmh; // límite de velocidad en la zona
-  const char *name;         // nombre de la vía/zona
-};
-
-// --------------------------- Mapa embebido de ejemplo (fallback) ---------------------------
-static MapZone embedded_map[] = {
-  // lat_min, lat_max, lon_min, lon_max, limit, "nombre"
-  { -34.6100, -34.6000, -58.4200, -58.4100, 60, "Av. Ejemplo 1" },
-  { -34.6200, -34.6150, -58.4300, -58.4250, 40, "Calle Prueba" },
-  { -34.6300, -34.6250, -58.4400, -58.4350, 80, "Ruta Demo" }
-};
-static const size_t embedded_map_size = sizeof(embedded_map) / sizeof(embedded_map[0]);
-
-// Mapa cargado (puede apuntar a embedded_map o a datos cargados desde SPIFFS)
-static MapZone *map_zones = embedded_map;
-static size_t map_zones_count = embedded_map_size;
-
-// --------------------------- Inter-core messaging (stub) ---------------------------
 struct InterCoreMsg {
   bool inside_zone;
-  uint16_t speed_limit;
+  uint8_t speed_limit;
   bool valid;
 };
 
-// En producción: reemplazar por xQueueSend() o intercore_send() que use la cola FreeRTOS
-void intercore_send_msg_stub(const InterCoreMsg &msg) {
-  // 1) Impresión para debug
-  Serial.printf(">> intercore_send_msg_stub: inside=%s limit=%u valid=%s\n",
-                msg.inside_zone ? "DENTRO" : "FUERA", msg.speed_limit, msg.valid ? "TRUE":"FALSE");
-  // 2) También lo enviamos por Bluetooth para debug remoto
-  if (SerialBT.hasClient()) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "ICMSG inside=%s limit=%u\n",
-             msg.inside_zone ? "1" : "0", msg.speed_limit);
-    SerialBT.print(buf);
-  }
-  // 3) (opcional) enviar a Serial1 para test con otro microcontrolador
-  // GPS_SERIAL.println("ICMSG:" + String(msg.inside_zone ? "1" : "0") + "," + String(msg.speed_limit));
-}
+// ============================================================================
+// VARIABLES GLOBALES
+// ============================================================================
 
-// Wrapper público usado por el resto del sistema (misma firma)
-void intercore_send_msg(const InterCoreMsg &msg) {
-  intercore_send_msg_stub(msg);
-}
+// Instancias
+TinyGPSPlus gps;
+BluetoothSerial SerialBT;
 
-// --------------------------- Funciones Bluetooth ---------------------------
-/**
- * @brief Inicializa Bluetooth SPP (nombre "RegVel_GPS")
- * En el sistema principal, Bluetooth se usa para debugging y para enviar datos / recibir comandos.
- */
-void bluetooth_init() {
-  if (!SerialBT.begin("RegVel_GPS")) {
-    Serial.println("ERROR: Bluetooth no pudo inicializarse.");
-  } else {
-    Serial.println("Bluetooth inicializado (RegVel_GPS)");
-  }
-}
+// Estado del sistema
+static unsigned long last_data_time = 0;
+static unsigned long chars_received = 0;
+bool bt_connected = false;
+bool test_mode = true;
+float current_speed_kmh = 0.0;
 
-/**
- * @brief Procesa comandos recibidos por Bluetooth (similares a los del monitor serie)
- */
-void bluetooth_handle_rx() {
-  if (!SerialBT.available()) return;
-  String line = SerialBT.readStringUntil('\n');
-  line.trim();
-  if (line.length() == 0) return;
+// Tareas FreeRTOS
+TaskHandle_t gpsTaskHandle = NULL;
+TaskHandle_t motorTaskHandle = NULL;
 
-  Serial.printf("[BT] comando: %s\n", line.c_str());
+// Comunicación entre núcleos
+QueueHandle_t intercore_queue;
 
-  // Por simplicidad reutilizamos el parser de comandos del Serial monitor (ver abajo)
-  // Llamamos a la misma función que maneja Serial para mantener comportamiento idéntico.
-  // Convertimos a mayúsculas donde convenga o separamos tokens.
-  // Aquí simplemente reenviamos al Serial local para manejarlo en el mismo parser:
-  Serial.println(line);
-}
+// ============================================================================
+// PROTOTIPOS BLUETOOTH INALÁMBRICO
+// ============================================================================
 
-// --------------------------- Funciones GPS (NMEA) ---------------------------
-/**
- * @brief Convierte un campo NMEA (lat o lon) en formato ddmm.mmmm + hemi a grados decimales
- * ejemplo: "3412.3456", 'S' -> -34.20576
- */
-double nmea_to_decimal_degrees(const String &field, char hemi) {
-  if (field.length() < 4) return 0.0;
-  // ddmm.mmmm (lat) o dddmm.mmmm (lon). Encontrar punto
-  int dotpos = field.indexOf('.');
-  int deg_digits = (dotpos == -1) ? 2 : (dotpos > 4 ? 3 : 2); // crude rule
-  // Mejor: lat -> 2 deg digits, lon -> 3 -> detectar por longitud
-  // Si la longitud total > 7 asumimos lon (3 dígitos)
-  if (field.length() > 7) deg_digits = 3;
-  String degs = field.substring(0, deg_digits);
-  String mins = field.substring(deg_digits);
-  double d = degs.toDouble();
-  double m = mins.toDouble();
-  double dec = d + (m / 60.0);
-  if (hemi == 'S' || hemi == 'W') dec = -dec;
-  return dec;
-}
+void bt_inalambrico_init();
+void bt_esperar_conexion();
+bool bt_conectar_hc06();
+void bt_verificar_conexion();
 
-/**
- * @brief Parsea una línea NMEA y actualiza un GPSFix (sólo GPRMC y GPGGA relevantes)
- * - Mantiene firma similar a gps_parse_nmea(String)
- */
-GPSFix gps_parse_nmea(const String &nmea_line) {
-  GPSFix fix;
-  fix.valid = false;
-  fix.lat = 0.0;
-  fix.lon = 0.0;
-  fix.speed_knots = 0.0;
-  fix.timestamp_ms = millis();
+// GPS
+void gps_procesar_datos();
+bool gps_obtener_posicion(GpsFix& fix);
+void gps_mostrar_estado();
 
-  String line = nmea_line;
-  line.trim();
-  if (line.length() == 0) return fix;
+// Mapa
+void mapa_procesar_posicion(const GpsFix& fix);
+void mapa_enviar_control(bool dentro_zona, uint8_t limite_velocidad);
 
-  // Validar inicio $
-  if (line[0] != '$') return fix;
+// Sistema
+void sistema_init();
+void sistema_mostrar_inicio();
+void sistema_procesar_comandos();
 
-  // Quitar checksum si existe
-  int asterisk = line.indexOf('*');
-  String payload = (asterisk > 0) ? line.substring(1, asterisk) : line.substring(1);
-  // Tokenizar por comma
-  int idx = payload.indexOf(',');
-  String sentence = (idx > 0) ? payload.substring(0, idx) : payload;
+// FreeRTOS
+bool intercore_init();
+bool intercore_enviar_msg(const InterCoreMsg& msg);
+bool intercore_recibir_msg(InterCoreMsg& msg, TickType_t timeout);
 
-  // GPRMC -> recommended minimum
-  if (payload.startsWith("GPRMC")) {
-    // Formato: GPRMC,hhmmss.sss,A,llll.ll,a,yyyyy.yy,a,x.x,xxx.x,ddmmyy,magvar,E*cs
-    // Campos: 1=time, 2=status A/V, 3=lat,4=N/S,5=lon,6/E/W,7=sog(knots), ...
-    // Splitting
-    std::vector<String> toks;
-    int start = 0;
-    for (int i = 0; i <= (int)payload.length(); ++i) {
-      if (i == (int)payload.length() || payload[i] == ',') {
-        toks.push_back(payload.substring(start, i));
-        start = i + 1;
-      }
-    }
-    if (toks.size() >= 8) {
-      String status = toks[2];
-      if (status == "A") {
-        String latf = toks[3];
-        char latH = toks[4].length() > 0 ? toks[4][0] : 'N';
-        String lonf = toks[5];
-        char lonH = toks[6].length() > 0 ? toks[6][0] : 'E';
-        String sog = toks[7];
+// Tareas
+void tareaGPS(void *pvParameters);
+void tareaMotor(void *pvParameters);
 
-        double latd = nmea_to_decimal_degrees(latf, latH);
-        double lond = nmea_to_decimal_degrees(lonf, lonH);
-        fix.lat = latd;
-        fix.lon = lond;
-        fix.valid = true;
-        fix.speed_knots = sog.toFloat();
-        fix.timestamp_ms = millis();
-      }
-    }
-    return fix;
-  }
+// ============================================================================
+// SETUP PRINCIPAL - BLUETOOTH INALÁMBRICO
+// ============================================================================
 
-  // GPGGA -> provides lat/lon even without RMC
-  if (payload.startsWith("GPGGA")) {
-    // GPGGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,quality,numSV,HDOP,alt,units,sep,units,dgpsAge,dgpsId
-    std::vector<String> toks;
-    int start = 0;
-    for (int i = 0; i <= (int)payload.length(); ++i) {
-      if (i == (int)payload.length() || payload[i] == ',') {
-        toks.push_back(payload.substring(start, i));
-        start = i + 1;
-      }
-    }
-    if (toks.size() >= 6) {
-      String latf = toks[2];
-      char latH = toks[3].length() > 0 ? toks[3][0] : 'N';
-      String lonf = toks[4];
-      char lonH = toks[5].length() > 0 ? toks[5][0] : 'E';
-      if (latf.length() > 0 && lonf.length() > 0) {
-        fix.lat = nmea_to_decimal_degrees(latf, latH);
-        fix.lon = nmea_to_decimal_degrees(lonf, lonH);
-        fix.valid = true;
-        fix.timestamp_ms = millis();
-      }
-    }
-    return fix;
-  }
-
-  return fix;
-}
-
-/**
- * @brief Inicializa el puerto serie del GPS (Serial1).
- * Firma: gps_init()
- */
-void gps_init(uint32_t baud = GPS_BAUD, int rxPin = GPS_RX_PIN, int txPin = GPS_TX_PIN) {
-  GPS_SERIAL.begin(baud, SERIAL_8N1, rxPin, txPin);
-  Serial.printf("gps_init(): Serial1 iniciado en %u baudios (RX=%d TX=%d)\n", baud, rxPin, txPin);
-}
-
-/**
- * @brief Procesa líneas NMEA disponibles del GPS (no bloqueante).
- * - Llama a gps_parse_nmea() por cada línea.
- * - Mantiene la última posición válida en memoria (last_fix).
- */
-static GPSFix last_fix;
-void gps_process_serial() {
-  static String line = "";
-  while (GPS_SERIAL.available()) {
-    char c = GPS_SERIAL.read();
-    if (c == '\r') continue;
-    if (c == '\n') {
-      if (line.length() > 0) {
-        GPSFix fx = gps_parse_nmea(line);
-        if (fx.valid) {
-          last_fix = fx;
-          Serial.printf("GPS fix: lat=%.6f lon=%.6f speed_kn=%.2f\n", fx.lat, fx.lon, fx.speed_knots);
-        } else {
-          // No válido pero log para debug si hace falta
-          // Serial.printf("NMEA parse no válido: %s\n", line.c_str());
-        }
-      }
-      line = "";
-    } else {
-      line += c;
-      // proteger contra líneas muy largas
-      if (line.length() > 200) line = "";
-    }
-  }
-}
-
-/**
- * @brief Permite inyectar NMEA por monitor serie para simular un GPS.
- * Comando Serial: "GPS <raw_nmea_line>"
- */
-void gps_inject_line(const String &nmea_line) {
-  GPSFix fx = gps_parse_nmea(nmea_line);
-  if (fx.valid) {
-    last_fix = fx;
-    Serial.printf("Injected GPS fix: lat=%.6f lon=%.6f\n", fx.lat, fx.lon);
-  } else {
-    Serial.println("Injected NMEA no válido o sin fix.");
-  }
-}
-
-// --------------------------- Funciones mapa (CSV) ---------------------------
-/**
- * @brief Intenta cargar mapa desde SPIFFS en /map.csv (formato: lat_min,lat_max,lon_min,lon_max,limit,name)
- * Si no hay SPIFFS o falla, deja el mapa apuntando al embedded_map.
- *
- * Firma: map_load_from_spiffs()
- */
-bool map_load_from_spiffs(const char *path = "/map.csv") {
-  if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS no disponible; usando mapa embebido.");
-    map_zones = embedded_map;
-    map_zones_count = embedded_map_size;
-    return false;
-  }
-  if (!SPIFFS.exists(path)) {
-    Serial.println("map.csv no encontrado en SPIFFS; usando mapa embebido.");
-    map_zones = embedded_map;
-    map_zones_count = embedded_map_size;
-    return false;
-  }
-
-  File f = SPIFFS.open(path, FILE_READ);
-  if (!f) {
-    Serial.println("No se pudo abrir map.csv; usando mapa embebido.");
-    map_zones = embedded_map;
-    map_zones_count = embedded_map_size;
-    return false;
-  }
-
-  // Para simplicidad cargamos en un buffer dinámico de MapZone (limitado a N líneas)
-  const size_t MAX_LINES = 64;
-  static MapZone parsed[MAX_LINES];
-  size_t parsed_count = 0;
-
-  while (f.available() && parsed_count < MAX_LINES) {
-    String line = f.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) continue;
-    // formato CSV simple: lat_min,lat_max,lon_min,lon_max,limit,name
-    std::vector<String> toks;
-    int start = 0;
-    for (int i = 0; i <= (int)line.length(); ++i) {
-      if (i == (int)line.length() || line[i] == ',') {
-        toks.push_back(line.substring(start, i));
-        start = i + 1;
-      }
-    }
-    if (toks.size() >= 6) {
-      parsed[parsed_count].lat_min = toks[0].toDouble();
-      parsed[parsed_count].lat_max = toks[1].toDouble();
-      parsed[parsed_count].lon_min = toks[2].toDouble();
-      parsed[parsed_count].lon_max = toks[3].toDouble();
-      parsed[parsed_count].speed_limit_kmh = (uint16_t) toks[4].toInt();
-      // NOTE: nombre: en este ejemplo no guardamos string dinámico; apuntamos a c_str de String (no ideal)
-      // Para pruebas esto alcanza; en producción guardá en vector<string> o estructura gestionada.
-      parsed[parsed_count].name = strdup(toks[5].c_str());
-      parsed_count++;
-    }
-  }
-  f.close();
-
-  if (parsed_count == 0) {
-    Serial.println("map.csv vacío o sin líneas válidas; usando mapa embebido.");
-    map_zones = embedded_map;
-    map_zones_count = embedded_map_size;
-    return false;
-  }
-
-  // Apuntar a parsed buffer (vive en memoria estática)
-  map_zones = parsed;
-  map_zones_count = parsed_count;
-  Serial.printf("Mapa cargado desde SPIFFS con %u zonas.\n", (unsigned)parsed_count);
-  return true;
-}
-
-/**
- * @brief Imprime zonas del mapa cargado (para debug)
- */
-void map_print_zones() {
-  Serial.printf("Map zones count = %u\n", (unsigned)map_zones_count);
-  for (size_t i = 0; i < map_zones_count; ++i) {
-    MapZone &z = map_zones[i];
-    Serial.printf("Zone %u: lat[%.6f..%.6f] lon[%.6f..%.6f] limit=%u name=%s\n",
-                  (unsigned)i, z.lat_min, z.lat_max, z.lon_min, z.lon_max, z.speed_limit_kmh, z.name);
-  }
-}
-
-/**
- * @brief Busca si la coordenada (lat,lon) está dentro de alguna zona del mapa.
- * Retorna true y el índice de la zona encontrada, o false si no hay coincidencia.
- * Firma: map_find_zone_for_coord(lat, lon, &out_zone_index)
- */
-bool map_find_zone_for_coord(double lat, double lon, size_t *out_zone_index) {
-  for (size_t i = 0; i < map_zones_count; ++i) {
-    MapZone &z = map_zones[i];
-    if (lat >= z.lat_min && lat <= z.lat_max && lon >= z.lon_min && lon <= z.lon_max) {
-      if (out_zone_index) *out_zone_index = i;
-      return true;
-    }
-  }
-  return false;
-}
-
-// --------------------------- Lógica de decisión y envío a Core 1 ---------------------------
-/**
- * @brief Decide si estamos "inside_zone" y cuál es el speed_limit, basándose en la última posición GPS.
- * - Si dentro de una zona del mapa: inside = true, speed_limit = zone.limit
- * - Si no: inside = false, speed_limit = 0
- * - Envía mensaje inter-core con intercore_send_msg()
- *
- * Firma: decide_speed_limit_and_send()
- */
-void decide_speed_limit_and_send() {
-  InterCoreMsg msg;
-  msg.valid = false;
-  msg.inside_zone = false;
-  msg.speed_limit = 0;
-
-  if (!last_fix.valid) {
-    Serial.println("decide_speed_limit_and_send(): sin fix GPS valido.");
-    // opcional: enviar msg fuera de zona
-    msg.valid = true;
-    msg.inside_zone = false;
-    msg.speed_limit = 0;
-    intercore_send_msg(msg);
-    return;
-  }
-
-  size_t idx;
-  if (map_find_zone_for_coord(last_fix.lat, last_fix.lon, &idx)) {
-    msg.valid = true;
-    msg.inside_zone = true;
-    msg.speed_limit = map_zones[idx].speed_limit_kmh;
-    Serial.printf("Decisión: DENTRO zona '%s' limit=%u km/h\n", map_zones[idx].name, msg.speed_limit);
-  } else {
-    msg.valid = true;
-    msg.inside_zone = false;
-    msg.speed_limit = 0;
-    Serial.println("Decisión: FUERA de zonas del mapa.");
-  }
-
-  intercore_send_msg(msg);
-}
-
-// --------------------------- Manejo de comandos por Serial (monitor) ---------------------------
-/*
- Comandos disponibles (escribe en monitor serie y presiona Enter):
-  - GPS <nmea_line>     -> inyecta NMEA string para simular GPS
-  - LOADMAP             -> intenta cargar /map.csv desde SPIFFS
-  - LISTMAP             -> imprime las zonas cargadas
-  - TESTSEND            -> fuerza decidir y enviar mensaje inter-core (usa last_fix)
-  - HELP                -> lista comandos
-*/
-void handle_serial_commands_module3(const String &line_raw) {
-  String line = line_raw;
-  line.trim();
-  if (line.length() == 0) return;
-
-  if (line.startsWith("GPS ")) {
-    String payload = line.substring(4);
-    gps_inject_line(payload);
-    return;
-  }
-  if (line.equalsIgnoreCase("LOADMAP")) {
-    map_load_from_spiffs("/map.csv");
-    return;
-  }
-  if (line.equalsIgnoreCase("LISTMAP")) {
-    map_print_zones();
-    return;
-  }
-  if (line.equalsIgnoreCase("TESTSEND")) {
-    decide_speed_limit_and_send();
-    return;
-  }
-  if (line.equalsIgnoreCase("HELP")) {
-    Serial.println("Comandos: GPS <line>, LOADMAP, LISTMAP, TESTSEND, HELP");
-    return;
-  }
-  Serial.printf("Comando desconocido: %s\n", line.c_str());
-}
-
-// --------------------------- Setup / Loop ---------------------------
 void setup() {
   Serial.begin(115200);
-  delay(100);
-  Serial.println("=== Module3 GPS+Bluetooth+Map (Core0) - prueba ===");
-
-  // Inicializaciones
-  bluetooth_init();
-  gps_init(GPS_BAUD, GPS_RX_PIN, GPS_TX_PIN);
-
-  // Intentar cargar mapa desde SPIFFS; si falla, usar embedded_map (map_load_from_spiffs lo maneja)
-  map_load_from_spiffs("/map.csv");
-
-  // estado inicial
-  last_fix.valid = false;
-
-  Serial.println("Listo. Enviar 'HELP' para ver comandos.");
+  sistema_init();
+  
+  // Crear tareas FreeRTOS
+  xTaskCreatePinnedToCore(
+    tareaGPS, "TareaGPS", GPS_TASK_STACK_SIZE, NULL, TASK_PRIORITY, &gpsTaskHandle, 0
+  );
+  
+  xTaskCreatePinnedToCore(
+    tareaMotor, "TareaMotor", MOTOR_TASK_STACK_SIZE, NULL, TASK_PRIORITY, &motorTaskHandle, 1
+  );
+  
+  Serial.println("\n✅ Sistema Bluetooth Inalámbrico Iniciado");
+  Serial.println("📡 Esperando conexión HC-06...");
 }
 
 void loop() {
-  // 1) Procesar comandos recibidos por Bluetooth (reenvían a Serial para manejo unificado)
-  bluetooth_handle_rx();
+  // Todo el procesamiento se hace en las tareas FreeRTOS
+  delay(1000);
+}
 
-  // 2) Procesar datos del GPS (Serial1) si hay
-  gps_process_serial();
+// ============================================================================
+// BLUETOOTH INALÁMBRICO - SIN CABLEADO
+// ============================================================================
 
-  // 3) Comprobar input desde el monitor serie (Serial) y ejecutar comandos
+void bt_inalambrico_init() {
+  Serial.println("\n");
+  Serial.println("╔══════════════════════════════════════════╗");
+  Serial.println("║         BLUETOOTH INALÁMBRICO           ║");
+  Serial.println("║           ESP32 ↔ HC-06                 ║");
+  Serial.println("║           SIN CONEXIONES POR CABLE      ║");
+  Serial.println("╚══════════════════════════════════════════╝");
+  
+  // Inicializar Bluetooth Serial en modo MAESTRO
+  if (!SerialBT.begin(BT_DEVICE_NAME, true)) {
+    Serial.println("❌ Error crítico: No se pudo iniciar Bluetooth");
+    return;
+  }
+  
+  Serial.println("✅ Bluetooth Serial iniciado como MAESTRO");
+  Serial.print("📛 Dispositivo: ");
+  Serial.println(BT_DEVICE_NAME);
+  
+  // Mostrar MAC del ESP32 para referencia
+  uint64_t mac = ESP.getEfuseMac();
+  Serial.print("📡 MAC ESP32: ");
+  Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X\n",
+    (uint8_t)(mac >> 40), (uint8_t)(mac >> 32), (uint8_t)(mac >> 24),
+    (uint8_t)(mac >> 16), (uint8_t)(mac >> 8), (uint8_t)mac);
+}
+
+void bt_esperar_conexion() {
+  Serial.println("\n🔵 BUSCANDO HC-06 INALÁMBRICAMENTE...");
+  Serial.println("==========================================");
+  
+  unsigned long inicio_espera = millis();
+  const unsigned long TIMEOUT_CONEXION = 45000; // 45 segundos
+  bool conexion_exitosa = false;
+  
+  // Convertir MAC string a array
+  if (sscanf(HC06_MAC_STR, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+             &HC06_MAC[0], &HC06_MAC[1], &HC06_MAC[2],
+             &HC06_MAC[3], &HC06_MAC[4], &HC06_MAC[5]) != 6) {
+    Serial.println("❌ Error: Formato de MAC incorrecto");
+    Serial.println("   Usa formato: 00:11:22:33:44:55");
+    return;
+  }
+  
+  Serial.print("🎯 Buscando HC-06 MAC: ");
+  Serial.println(HC06_MAC_STR);
+  
+  while (!conexion_exitosa && (millis() - inicio_espera < TIMEOUT_CONEXION)) {
+    
+    // Intentar conexión cada 5 segundos
+    static unsigned long ultimo_intento = 0;
+    if (millis() - ultimo_intento > 5000) {
+      ultimo_intento = millis();
+      
+      Serial.println("🔄 Intentando conexión inalámbrica...");
+      
+      // Configurar PIN del HC-06
+      SerialBT.setPin(HC06_PIN);
+      
+      // Intentar conexión inalámbrica
+      if (SerialBT.connect(HC06_MAC)) {
+        conexion_exitosa = true;
+        bt_connected = true;
+        Serial.println("✅ ¡CONEXIÓN INALÁMBRICA ESTABLECIDA!");
+        Serial.println("📡 HC-06 conectado via Bluetooth");
+        break;
+      } else {
+        unsigned segundos_espera = (millis() - inicio_espera) / 1000;
+        Serial.printf("⏳ No encontrado... (%u segundos)\n", segundos_espera);
+        Serial.println("   Verifica:");
+        Serial.println("   1. HC-06 encendido y en modo esclavo");
+        Serial.println("   2. MAC correcta del HC-06");
+        Serial.println("   3. HC-06 en rango Bluetooth");
+      }
+    }
+    
+    // Pequeña pausa para no saturar
+    delay(500);
+  }
+  
+  if (conexion_exitosa) {
+    Serial.println("==========================================");
+    Serial.println("🎉 ¡SISTEMA INALÁMBRICO CONECTADO!");
+    Serial.println("📊 Iniciando recepción de datos GPS...");
+    Serial.println("==========================================");
+  } else {
+    Serial.println("==========================================");
+    Serial.println("❌ Timeout: HC-06 no encontrado");
+    Serial.println("🔍 Verifica la configuración del HC-06");
+    Serial.println("📡 Continuando en modo espera...");
+    Serial.println("==========================================");
+  }
+}
+
+void bt_verificar_conexion() {
+  // Verificar estado de conexión periódicamente
+  static unsigned long ultima_verificacion = 0;
+  if (millis() - ultima_verificacion > 10000) { // Cada 10 segundos
+    ultima_verificacion = millis();
+    
+    if (SerialBT.connected() && !bt_connected) {
+      bt_connected = true;
+      Serial.println("🔵 Reconexión Bluetooth detectada");
+    } else if (!SerialBT.connected() && bt_connected) {
+      bt_connected = false;
+      Serial.println("🔴 Conexión Bluetooth perdida");
+      Serial.println("🔄 Intentando reconexión automática...");
+    }
+  }
+}
+
+// ============================================================================
+// PROCESAMIENTO GPS POR BLUETOOTH INALÁMBRICO
+// ============================================================================
+
+void gps_procesar_datos() {
+  // Leer datos GPS via Bluetooth inalámbrico
+  while (SerialBT.available()) {
+    char c = SerialBT.read();
+    
+    // Alimentar parser GPS
+    gps.encode(c);
+    
+    // Actualizar contadores
+    chars_received++;
+    last_data_time = millis();
+    
+    // Debug: mostrar datos NMEA (descomentar si necesario)
+    // Serial.write(c);
+  }
+}
+
+bool gps_obtener_posicion(GpsFix& fix) {
+  // Modo simulación para pruebas sin HC-06
+  if (test_mode) {
+    static unsigned long ultima_simulacion = 0;
+    if (millis() - ultima_simulacion > 2000) { // Nuevo dato cada 2 segundos
+      // Simular posición en Barcelona
+      fix.lat = 41.3851 + (random(-100, 100) / 100000.0);
+      fix.lon = 2.1734 + (random(-100, 100) / 100000.0);
+      fix.speedKph = random(0, 100);
+      fix.courseDeg = random(0, 360);
+      fix.hdop = 1.5;
+      ultima_simulacion = millis();
+      return true;
+    }
+    return false;
+  }
+  
+  // Modo real: datos del GPS via Bluetooth inalámbrico
+  if (gps.location.isValid() && gps.location.isUpdated()) {
+    fix.lat = gps.location.lat();
+    fix.lon = gps.location.lng();
+    fix.speedKph = gps.speed.isValid() ? gps.speed.kmph() : 0.0;
+    fix.courseDeg = gps.course.isValid() ? gps.course.deg() : 0.0;
+    fix.hdop = gps.hdop.isValid() ? gps.hdop.hdop() : 99.0;
+    return true;
+  }
+  
+  return false;
+}
+
+void gps_mostrar_estado() {
+  Serial.println("\n========== ESTADO INALÁMBRICO ==========");
+  
+  // Estado Bluetooth
+  bool recibiendo_datos = (millis() - last_data_time < 5000) && (chars_received > 0);
+  Serial.print("📶 Bluetooth: ");
+  Serial.println(SerialBT.connected() ? "CONECTADO" : "DESCONECTADO");
+  Serial.print("📨 Recepción: ");
+  Serial.println(recibiendo_datos ? "ACTIVA" : "INACTIVA");
+  Serial.print("📊 Datos recibidos: ");
+  Serial.println(chars_received);
+  
+  if (SerialBT.connected() && chars_received > 0) {
+    unsigned long segundos_sin_datos = (millis() - last_data_time) / 1000;
+    Serial.print("⏱️  Último dato: ");
+    Serial.print(segundos_sin_datos);
+    Serial.println(" segundos");
+  }
+  
+  // Estado GPS
+  if (gps.location.isValid()) {
+    Serial.println("\n📍 POSICIÓN GPS:");
+    Serial.printf("   Latitud:  %.6f\n", gps.location.lat());
+    Serial.printf("   Longitud: %.6f\n", gps.location.lng());
+    
+    if (gps.speed.isValid()) {
+      Serial.printf("   Velocidad: %.1f km/h\n", gps.speed.kmph());
+    }
+    
+    if (gps.satellites.isValid()) {
+      Serial.printf("   Satélites: %d\n", gps.satellites.value());
+    }
+    
+    if (gps.hdop.isValid()) {
+      Serial.printf("   Precisión: %.2f\n", gps.hdop.hdop());
+    }
+  } else {
+    Serial.println("\n🌎 GPS: Esperando señal...");
+  }
+  
+  Serial.println("======================================");
+}
+
+// ============================================================================
+// SISTEMA DE MAPA
+// ============================================================================
+
+void mapa_procesar_posicion(const GpsFix& fix) {
+  // Simulación de zonas en Barcelona
+  const double ZONA_CENTRO_LAT_MIN = 41.37;
+  const double ZONA_CENTRO_LAT_MAX = 41.40;
+  const double ZONA_CENTRO_LON_MIN = 2.16;
+  const double ZONA_CENTRO_LON_MAX = 2.19;
+  
+  bool dentro_zona = (fix.lat >= ZONA_CENTRO_LAT_MIN && fix.lat <= ZONA_CENTRO_LAT_MAX &&
+                     fix.lon >= ZONA_CENTRO_LON_MIN && fix.lon <= ZONA_CENTRO_LON_MAX);
+  
+  uint8_t limite_velocidad = dentro_zona ? 30 : 50; // 30 en centro, 50 fuera
+  
+  // Enviar información al control del motor
+  mapa_enviar_control(dentro_zona, limite_velocidad);
+  
+  // Mostrar información
+  Serial.printf("🗺️  %s | Límite: %d km/h | Vel: %.1f km/h\n",
+                dentro_zona ? "ZONA CENTRO" : "ZONA PERIFERIA",
+                limite_velocidad, fix.speedKph);
+}
+
+void mapa_enviar_control(bool dentro_zona, uint8_t limite_velocidad) {
+  InterCoreMsg mensaje;
+  mensaje.inside_zone = dentro_zona;
+  mensaje.speed_limit = limite_velocidad;
+  mensaje.valid = true;
+  
+  if (intercore_enviar_msg(mensaje)) {
+    current_speed_kmh = gps.speed.isValid() ? gps.speed.kmph() : 0.0;
+  }
+}
+
+// ============================================================================
+// SISTEMA GENERAL
+// ============================================================================
+
+void sistema_init() {
+  // Configurar LED integrado
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+  
+  // Inicializar comunicación entre núcleos
+  if (!intercore_init()) {
+    Serial.println("❌ Error crítico: Comunicación inter-núcleos falló");
+    while(true) {
+      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+      delay(200);
+    }
+  }
+  
+  sistema_mostrar_inicio();
+}
+
+void sistema_mostrar_inicio() {
+  Serial.println("\n");
+  Serial.println("╔══════════════════════════════════════════╗");
+  Serial.println("║        SISTEMA INALÁMBRICO GPS         ║");
+  Serial.println("║           ESP32 + HC-06                 ║");
+  Serial.println("║        CONEXIÓN TOTAL POR BLUETOOTH     ║");
+  Serial.println("╚══════════════════════════════════════════╝");
+  
+  Serial.println("\n🎯 OBJETIVO: Conexión 100% inalámbrica entre ESP32 y HC-06");
+  Serial.println("📡 Sin cables entre módulos Bluetooth");
+  
+  Serial.println("\n📋 Comandos disponibles:");
+  Serial.println("   t - Alternar modo test (sin HC-06)");
+  Serial.println("   s - Estado del sistema");
+  Serial.println("   g - Estado GPS/Bluetooth");
+  Serial.println("   c - Forzar conexión HC-06");
+  Serial.println("   d - Desconectar Bluetooth");
+  Serial.println("   m - Simular movimiento GPS");
+}
+
+void sistema_procesar_comandos() {
   while (Serial.available()) {
-    String line = Serial.readStringUntil('\n');
-    handle_serial_commands_module3(line);
+    char comando = Serial.read();
+    
+    switch (comando) {
+      case 't':
+        test_mode = !test_mode;
+        Serial.printf("🔧 Modo test: %s\n", test_mode ? "ACTIVADO" : "DESACTIVADO");
+        if (test_mode) {
+          Serial.println("   📍 Simulando datos GPS sin HC-06");
+        } else {
+          Serial.println("   📡 Usando datos reales del HC-06");
+        }
+        break;
+        
+      case 's':
+        Serial.println("\n=== ESTADO DEL SISTEMA INALÁMBRICO ===");
+        Serial.printf("🔧 Modo test: %s\n", test_mode ? "ON" : "OFF");
+        Serial.printf("📶 BT Conectado: %s\n", SerialBT.connected() ? "SI" : "NO");
+        Serial.printf("📨 Datos recibidos: %lu\n", chars_received);
+        Serial.printf("🎯 Velocidad: %.1f km/h\n", current_speed_kmh);
+        Serial.printf("🔋 Memoria libre: %d bytes\n", esp_get_free_heap_size());
+        break;
+        
+      case 'g':
+        gps_mostrar_estado();
+        break;
+        
+      case 'c':
+        Serial.println("🔄 Forzando conexión HC-06...");
+        if (SerialBT.connected()) {
+          SerialBT.disconnect();
+          delay(1000);
+        }
+        bt_connected = false;
+        bt_esperar_conexion();
+        break;
+        
+      case 'd':
+        Serial.println("🔌 Desconectando Bluetooth...");
+        if (SerialBT.connected()) {
+          SerialBT.disconnect();
+          bt_connected = false;
+          Serial.println("✅ Bluetooth desconectado");
+        } else {
+          Serial.println("❌ Bluetooth ya estaba desconectado");
+        }
+        break;
+        
+      case 'm':
+        Serial.println("🎮 Activando simulación de movimiento...");
+        test_mode = true;
+        break;
+        
+      case '\n':
+      case '\r':
+        break;
+        
+      default:
+        Serial.println("❌ Comando desconocido");
+        Serial.println("   Usa: t, s, g, c, d, m");
+        break;
+    }
   }
+}
 
-  // 4) Política de decisión periódica (cada 1s por ejemplo)
-  static unsigned long last_decision_ms = 0;
-  unsigned long now = millis();
-  if (now - last_decision_ms >= 1000) {
-    last_decision_ms = now;
-    decide_speed_limit_and_send();
+// ============================================================================
+// COMUNICACIÓN FREERTOS
+// ============================================================================
+
+bool intercore_init() {
+  intercore_queue = xQueueCreate(5, sizeof(InterCoreMsg));
+  return (intercore_queue != NULL);
+}
+
+bool intercore_enviar_msg(const InterCoreMsg& msg) {
+  return xQueueSend(intercore_queue, &msg, pdMS_TO_TICKS(50)) == pdTRUE;
+}
+
+bool intercore_recibir_msg(InterCoreMsg& msg, TickType_t timeout) {
+  return xQueueReceive(intercore_queue, &msg, timeout) == pdTRUE;
+}
+
+// ============================================================================
+// TAREAS FREERTOS - SISTEMA INALÁMBRICO
+// ============================================================================
+
+void tareaGPS(void *pvParameters) {
+  Serial.println("[Core 0] 🛰️ Iniciando sistema GPS inalámbrico...");
+  
+  // Inicializar Bluetooth inalámbrico
+  bt_inalambrico_init();
+  
+  // Esperar conexión con HC-06
+  bt_esperar_conexion();
+  
+  Serial.println("[Core 0] ✅ Sistema inalámbrico listo");
+  
+  unsigned long ultimo_procesamiento = 0;
+  unsigned long ultimo_parpadeo = 0;
+  bool estado_led = true;
+  
+  while (true) {
+    // Parpadear LED indicando actividad
+    if (millis() - ultimo_parpadeo > 1000) {
+      estado_led = !estado_led;
+      digitalWrite(LED_BUILTIN, estado_led);
+      ultimo_parpadeo = millis();
+    }
+    
+    // Procesar comandos del usuario
+    sistema_procesar_comandos();
+    
+    // Verificar estado de conexión Bluetooth
+    bt_verificar_conexion();
+    
+    // Procesar datos GPS via Bluetooth inalámbrico
+    gps_procesar_datos();
+    
+    // Procesamiento principal cada 3 segundos
+    if (millis() - ultimo_procesamiento >= 3000) {
+      ultimo_procesamiento = millis();
+      
+      // Obtener posición GPS
+      GpsFix posicion_actual;
+      if (gps_obtener_posicion(posicion_actual)) {
+        // Validar calidad de señal
+        if (posicion_actual.hdop <= HDOP_MAX) {
+          // Procesar en el sistema de mapa
+          mapa_procesar_posicion(posicion_actual);
+        } else if (!test_mode) {
+          Serial.println("📡 Señal GPS débil - esperando mejor precisión");
+        }
+      } else if (SerialBT.connected() && !test_mode) {
+        Serial.println("⏳ Esperando datos GPS del HC-06...");
+      }
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
+}
 
-  // pequeña espera no bloqueante
-  delay(10);
+void tareaMotor(void *pvParameters) {
+  Serial.println("[Core 1] 🚗 Iniciando sistema de control...");
+  
+  InterCoreMsg ultimo_mensaje = {false, 0, false};
+  unsigned long ultimo_estado = 0;
+  
+  while (true) {
+    // Recibir mensajes del núcleo GPS
+    InterCoreMsg nuevo_mensaje;
+    if (intercore_recibir_msg(nuevo_mensaje, pdMS_TO_TICKS(100))) {
+      if (nuevo_mensaje.valid) {
+        ultimo_mensaje = nuevo_mensaje;
+        
+        // Control basado en límites de velocidad
+        if (ultimo_mensaje.inside_zone && current_speed_kmh > ultimo_mensaje.speed_limit) {
+          Serial.printf("⚠️  ALERTA VELOCIDAD: %.1f km/h > Límite %d km/h\n", 
+                       current_speed_kmh, ultimo_mensaje.speed_limit);
+        }
+      }
+    }
+    
+    // Reporte de estado cada 15 segundos
+    if (millis() - ultimo_estado > 15000) {
+      ultimo_estado = millis();
+      Serial.printf("[Control] Vel: %.1fkm/h | Zona: %s | Límite: %dkm/h\n",
+                   current_speed_kmh,
+                   ultimo_mensaje.inside_zone ? "CENTRO" : "PERIFERIA",
+                   ultimo_mensaje.speed_limit);
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
 }

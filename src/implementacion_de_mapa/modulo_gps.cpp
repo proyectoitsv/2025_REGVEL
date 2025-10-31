@@ -241,7 +241,7 @@ void bt_connect_hc06_by_mac() {
 
   // Asegurar que el PIN esté configurado (algunos firmwares lo requieren)
   // setPin acepta (const char*, uint8_t) en algunos builds; usamos la longitud del PIN:
-  SerialBT.setPin(HC06_PIN);//si esta linea da error probar con:  SerialBT.setPin(HC06_PIN, 4); ó   SerialBT.setPin(HC06_PIN);
+ SerialBT.setPin(HC06_PIN, 4); //si esta linea da error probar con:  SerialBT.setPin(HC06_PIN, 4); ó   SerialBT.setPin(HC06_PIN);
 
   // Intento de conexión (bloqueante corto — retorna true si conectado)
   DEBUG_SERIAL.println("Conectando...");

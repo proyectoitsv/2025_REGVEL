@@ -25,7 +25,7 @@ TaskHandle_t gpsTaskHandle = NULL;
 TaskHandle_t motorTaskHandle = NULL;
 
 // Modo de test local
-static bool test_mode = true;
+static bool test_mode = false;
 
 // Prototipos de funciones de tareas
 void gpsTask(void *pvParameters);
@@ -80,7 +80,7 @@ void setup() {
 
 void loop() {
   // El loop principal está vacío ya que todo se maneja en las tareas
-  delay(1000);
+  // delay(1000);
 }
 
 // ========================= TAREA CORE 0: GPS Y MAPA =========================

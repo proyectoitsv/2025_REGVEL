@@ -45,7 +45,7 @@ static uint32_t last_speed_calc_ms = 0;         // Timestamp del último cálcul
 // ========================= FUNCIONES GENERALES (SIN CAMBIOS) =========================
 void io_init() {
   DEBUG_SERIAL.begin(DEBUG_BAUD);
-  //delay(200);
+  delay(200);
 }
 
 void io_print_startup_message() {

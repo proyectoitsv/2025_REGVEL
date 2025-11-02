@@ -54,14 +54,14 @@ void gps_init() {
   if (!SerialBT.begin(BT_DEVICE_NAME)) {
     DEBUG_SERIAL.println("ERROR: No se pudo iniciar Bluetooth");
     DEBUG_SERIAL.println("Reinicia el ESP32");
-    return;
+    while(1) delay(1000);
   }
 
   DEBUG_SERIAL.println("Bluetooth iniciado OK");
   DEBUG_SERIAL.print("Nombre BT: ");
   DEBUG_SERIAL.println(BT_DEVICE_NAME);
 
-  // Obtener y mostrar MAC del ESP32
+  // Obtener y mostrar MAC del ESP32 (para configurar HC-05)
   uint64_t mac = ESP.getEfuseMac();
   DEBUG_SERIAL.print("MAC ESP32: ");
   DEBUG_SERIAL.printf("%02X:%02X:%02X:%02X:%02X:%02X\n",
@@ -73,43 +73,12 @@ void gps_init() {
     (uint8_t)(mac >> 40), (uint8_t)(mac >> 32), (uint8_t)(mac >> 24),
     (uint8_t)(mac >> 16), (uint8_t)(mac >> 8), (uint8_t)mac);
 
-  // ---------------------------------------------------------------------------
-  // ESPERA ACTIVA SIN BLOQUEO PARA CONEXIÓN BLUETOOTH
-  // ---------------------------------------------------------------------------
-  DEBUG_SERIAL.println("\n⏳ Esperando conexión Bluetooth HC-06...");
-  
-  unsigned long startWaitTime = millis();
-  const unsigned long CONNECTION_TIMEOUT = 30000; // 30 segundos máximo
-  
-  // Espera activa sin bloqueo para conexión
-  while (!SerialBT.connected()) {
-    // Verificar timeout
-    if (millis() - startWaitTime > CONNECTION_TIMEOUT) {
-      DEBUG_SERIAL.println("❌ Timeout: HC-06 no conectado después de 30 segundos");
-      DEBUG_SERIAL.println("📡 Continuando en modo espera...");
-      break;
-    }
-    
-    // Mensaje periódico cada 3 segundos sin bloquear
-    static unsigned long lastStatusTime = 0;
-    if (millis() - lastStatusTime > 3000) {
-      lastStatusTime = millis();
-      unsigned long elapsed = (millis() - startWaitTime) / 1000;
-      DEBUG_SERIAL.printf("⏰ Esperando HC-06... (%lu segundos)\n", elapsed);
-    }
-    
-    // Permitir que otras tareas se ejecuten
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
-
-  // Verificar si finalmente se conectó
-  if (SerialBT.connected()) {
-    DEBUG_SERIAL.println("✅ ¡HC-06 CONECTADO! - Iniciando recepción de datos GPS...");
-  }
-
+  DEBUG_SERIAL.println("\nEsperando datos del HC-05...");
+  DEBUG_SERIAL.println("(El HC-05 debe conectarse automaticamente)");
   DEBUG_SERIAL.println("===========================================\n");
+
   // Pequeña espera para dar tiempo a la conexión
-  //delay(3000);
+  delay(3000);
 
   // ---------------------------------------------------------------------------
   // INVOCACIÓN: Intentar conectar activamente al HC-06 por MAC (nuevo comportamiento)
@@ -262,25 +231,29 @@ void gps_enable_raw_debug(bool enable) {
    - Mantiene mensajes de depuración con DEBUG_SERIAL.
    ============================================================================ */
 void bt_connect_hc06_by_mac() {
-  // Convertir MAC string a array uint8_t
+  // Convertir MAC string a array uint8_t (formato XX:XX:XX:XX:XX:XX)
   sscanf(HC06_MAC_STR, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
          &HC06_MAC[0], &HC06_MAC[1], &HC06_MAC[2],
          &HC06_MAC[3], &HC06_MAC[4], &HC06_MAC[5]);
 
-  DEBUG_SERIAL.print("🔗 Intentando conectar a HC-06 (MAC): ");
+  DEBUG_SERIAL.print("Intentando conectar a HC-06 (MAC): ");
   DEBUG_SERIAL.println(HC06_MAC_STR);
 
-  // Configurar PIN
-  SerialBT.setPin(HC06_PIN);
+  // Asegurar que el PIN esté configurado (algunos firmwares lo requieren)
+  // setPin acepta (const char*, uint8_t) en algunos builds; usamos la longitud del PIN:
+ SerialBT.setPin(HC06_PIN, 4); //si esta linea da error probar con:  SerialBT.setPin(HC06_PIN, 4); ó   SerialBT.setPin(HC06_PIN);
 
-  // Intento de conexión
-  DEBUG_SERIAL.println("🔄 Conectando...");
+  // Intento de conexión (bloqueante corto — retorna true si conectado)
+  DEBUG_SERIAL.println("Conectando...");
   connected = SerialBT.connect(HC06_MAC);
 
   if (connected) {
-    DEBUG_SERIAL.println("✅ Conectado al HC-06 exitosamente");
+    DEBUG_SERIAL.println("✅ Conectado al HC-06");
   } else {
-    DEBUG_SERIAL.println("❌ No se pudo conectar al HC-06");
-    DEBUG_SERIAL.println("📡 El HC-06 debe conectarse automáticamente cuando esté en rango");
+    DEBUG_SERIAL.println("❌ Error en la conexión al HC-06");
   }
+
+  // Nota: si se desea, se puede añadir lógica de reconexión periódica similar
+  // al ejemplo original; aquí solo agregamos el intento inicial para no alterar
+  // la estructura actual del proyecto.
 }

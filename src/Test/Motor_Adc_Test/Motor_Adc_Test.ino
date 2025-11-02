@@ -14,7 +14,7 @@
 */
 
 #include <Arduino.h>
-
+#include <esp32-hal-ledc.h>
 // --------------------------- Configuración pines ---------------------------
 #define HALL_PIN 34          // Pin de entrada del sensor Hall (interrupt-capable)
 #define PEDAL_ADC_PIN 35     // Pin ADC para lectura de pedal (0..4095)
@@ -176,9 +176,9 @@ float adc_pedal_read(uint8_t pin = PEDAL_ADC_PIN) {
  * @brief Inicializa PWM para motor (ledc).
  * Firma: pwm_motor_init()
  */
-void pwm_motor_init(uint8_t pin, int channel, int freq, int res) {
-  ledcSetup(channel, freq, res); 
-  ledcAttachPin(pin, channel);
+void pwm_motor_init(uint8_t pin = MOTOR_PWM_PIN, int channel = MOTOR_PWM_CHANNEL, int freq = MOTOR_PWM_FREQ, int res = MOTOR_PWM_RES) {
+  //ledcSetup(channel, freq, res); 
+  ledcAttach(pin, channel, freq);
   ledcWrite(channel, 0);
   pinMode(LED_ACTIVITY_PIN, OUTPUT);
   digitalWrite(LED_ACTIVITY_PIN, LOW);

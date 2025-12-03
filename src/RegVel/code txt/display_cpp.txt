@@ -1,0 +1,89 @@
+//=== display.cpp ===
+#include "display.h"
+#include "config.h"
+#include "motor_control.h"
+
+// --- Variables Multiplexado ---
+static uint32_t last_mux_us = 0;
+static uint8_t  digit_idx = 0;
+static uint8_t  digits[3] = {0, 0, 0}; // [Centenas, Decenas, Unidades]
+
+// --- Helpers BCD 4511 ---
+void write_bcd(uint8_t val) {
+    digitalWrite(PIN_DISP_A, (val & 1) ? HIGH : LOW);
+    digitalWrite(PIN_DISP_B, (val & 2) ? HIGH : LOW);
+    digitalWrite(PIN_DISP_C, (val & 4) ? HIGH : LOW);
+    digitalWrite(PIN_DISP_D, (val & 8) ? HIGH : LOW);
+}
+
+void disp_init() {
+    // Pines BCD
+    pinMode(PIN_DISP_A, OUTPUT); pinMode(PIN_DISP_B, OUTPUT);
+    pinMode(PIN_DISP_C, OUTPUT); pinMode(PIN_DISP_D, OUTPUT);
+    
+    // Pines Dígitos
+    pinMode(PIN_DIG_1, OUTPUT); 
+    pinMode(PIN_DIG_2, OUTPUT); 
+    pinMode(PIN_DIG_3, OUTPUT);
+
+    // Pines LEDs Límites
+    pinMode(PIN_LED_L1, OUTPUT); pinMode(PIN_LED_L2, OUTPUT);
+    pinMode(PIN_LED_L3, OUTPUT); pinMode(PIN_LED_L4, OUTPUT);
+    
+    // Apagar todo al inicio
+    digitalWrite(PIN_LED_L1, LOW); digitalWrite(PIN_LED_L2, LOW);
+    digitalWrite(PIN_LED_L3, LOW); digitalWrite(PIN_LED_L4, LOW);
+}
+// En display.cpp, mejorar la función de indicador de límite
+void disp_set_limit_indicator(uint8_t limit_idx) {
+    // Apagar todos los LEDs primero
+    digitalWrite(PIN_LED_L1, LOW);
+    digitalWrite(PIN_LED_L2, LOW);
+    digitalWrite(PIN_LED_L3, LOW);
+    digitalWrite(PIN_LED_L4, LOW);
+    
+    // Encender solo el LED correspondiente
+    switch(limit_idx) {
+        case 1: digitalWrite(PIN_LED_L1, HIGH); break;
+        case 2: digitalWrite(PIN_LED_L2, HIGH); break;
+        case 3: digitalWrite(PIN_LED_L3, HIGH); break;
+        case 4: digitalWrite(PIN_LED_L4, HIGH); break;
+    }
+    
+    Serial.printf("[DISPLAY] Indicador límite %d activado\n", limit_idx);
+}
+
+void disp_mux() {
+    uint32_t now = micros();
+    if (now - last_mux_us < DISP_MUX_US) return;
+    last_mux_us = now;
+
+    // 1. Obtener velocidad actual del motor
+    int speed = (int)(motor_get_speed() * SPEED_DISPLAY_MULT);
+    if (speed > 999) speed = 999;
+
+    // 2. Descomponer en dígitos
+    digits[0] = speed / 100;
+    digits[1] = (speed / 10) % 10;
+    digits[2] = speed % 10;
+
+    // 3. Apagar todos los dígitos (Blanking)
+    // Ajustar HIGH/LOW según transistores (Asumido: Active LOW)
+    digitalWrite(PIN_DIG_1, HIGH); 
+    digitalWrite(PIN_DIG_2, HIGH);
+    digitalWrite(PIN_DIG_3, HIGH);
+
+    // 4. Escribir BCD del dígito actual
+    write_bcd(digits[digit_idx]);
+
+    // 5. Encender solo el dígito actual
+    switch (digit_idx) {
+        case 0: digitalWrite(PIN_DIG_1, LOW); break;
+        case 1: digitalWrite(PIN_DIG_2, LOW); break;
+        case 2: digitalWrite(PIN_DIG_3, LOW); break;
+    }
+
+    // 6. Avanzar índice
+    digit_idx++;
+    if (digit_idx > 2) digit_idx = 0;
+}

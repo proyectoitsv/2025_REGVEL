@@ -1,0 +1,295 @@
+
+// ARCHIVO: motor_control.cpp 
+
+#include "motor_control.h"
+#include "config.h"
+#include "display.h"
+
+// Variables Volátiles (ISR)
+static volatile uint32_t hall_pulses = 0;
+static volatile uint32_t hall_last_ms = 0;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Variables Estado
+static float    current_speed = 0.0;    // ← AGREGADO: velocidad actual
+static uint16_t current_adc = 0;
+static uint8_t  current_pwm = 0;
+static uint8_t  current_limit_idx = 0;
+
+// Variables para cálculo de velocidad
+static uint32_t last_speed_calc_ms = 0;  // ← AGREGADO: último cálculo
+static uint32_t last_pulse_count = 0;    // ← AGREGADO: último conteo
+
+// Variables Override
+static bool     ovr_active = false;
+static uint32_t ovr_end_ms = 0;
+static uint32_t tap_last_ms = 0;
+static bool     tap_flag_high = false;
+
+// Variables para animaciones LED
+enum LedAnimType {
+    ANIM_NONE,
+    ANIM_ACTIVATING,    // 5 destellos a 2Hz al aplicar límite
+    ANIM_RELEASING      // Oscilación 10Hz al liberar con override
+};
+
+static LedAnimType current_animation = ANIM_NONE;
+static uint32_t anim_start_ms = 0; 
+static uint8_t anim_blink_count = 0;
+static bool anim_phase = false; //led_toggle
+static bool led_steady_state = false;  // Estado cuando no hay animación
+
+// INTERRUPCIÓN SENSOR HALL 
+void IRAM_ATTR isr_hall() {
+    portENTER_CRITICAL_ISR(&timerMux);
+    hall_pulses++;
+    hall_last_ms = millis();
+    portEXIT_CRITICAL_ISR(&timerMux);
+}
+
+//  Cálculo de velocidad desde sensor Hall
+void calcular_velocidad() {
+    uint32_t now = millis();
+    
+    // Calcular cada 100ms para tener una ventana de tiempo razonable
+    if (now - last_speed_calc_ms >= 100) {
+        
+        // Leer el contador de pulsos de forma segura (con protección de interrupciones)
+        portENTER_CRITICAL(&timerMux);
+        uint32_t current_pulses = hall_pulses;
+        portEXIT_CRITICAL(&timerMux);
+        
+        // Calcular pulsos en el período
+        uint32_t pulses_in_period = current_pulses - last_pulse_count;
+        
+        // Calcular RPM (pulsos por minuto)
+        // Si hay 1 pulso por revolución: RPM = (pulsos_periodo * 60000) / (tiempo_ms * pulsos_por_rev)
+        float rpm = 0.0;
+        if (pulses_in_period > 0) {
+            rpm = (pulses_in_period * 60000.0) / (100.0 * HALL_PULSES_REV);
+        }
+        
+        // Calcular velocidad en km/h
+        // Velocidad = (RPM * circunferencia_rueda * 60) / 1000
+        current_speed = (rpm * WHEEL_CIRC_M * 60.0) / 1000.0;
+        
+        // Actualizar para la próxima medición
+        last_pulse_count = current_pulses;
+        last_speed_calc_ms = now;
+        
+        // Debug: imprimir cada segundo
+        static uint32_t last_debug_ms = 0;
+        if (now - last_debug_ms > 1000) {
+            Serial.printf("[HALL] Pulsos: %d, RPM: %.1f, Velocidad: %.1f km/h\n",
+                         pulses_in_period, rpm, current_speed);
+            last_debug_ms = now;
+        }
+    }
+}
+
+//  Actualizar detección de doble tap
+
+void check_double_tap() {
+    uint32_t now = millis();
+    bool is_high = (current_adc > ADC_DBL_TAP_THR);
+
+    if (is_high && !tap_flag_high) {
+        uint32_t diff = now - tap_last_ms;
+        if (diff >= TAP_MIN_MS && diff <= TAP_MAX_MS) {
+            if (current_limit_idx > 0) {
+                ovr_active = true;
+                uint32_t duration = 5; 
+                switch(current_limit_idx) {
+                    case 1: duration = TIME_OVR_L1; break;
+                    case 2: duration = TIME_OVR_L2; break;
+                    case 3: duration = TIME_OVR_L3; break;
+                    case 4: duration = TIME_OVR_L4; break;
+                }
+                ovr_end_ms = now + (duration * 1000);
+                
+                // Iniciar animación de liberación
+                current_animation = ANIM_RELEASING;
+                anim_start_ms = now; //anim_timer
+                anim_blink_count = 0;//anim_counter
+                
+                Serial.printf("[OVERRIDE] Activado por %.1fs (Límite %d)\\n", 
+                             (float)duration, current_limit_idx);
+            }
+        }
+        tap_last_ms = now;
+    }
+    tap_flag_high = is_high;
+
+    if (ovr_active && now > ovr_end_ms) {
+        ovr_active = false;
+        Serial.println("[OVERRIDE] Finalizado");
+    }
+}
+
+void update_limit_led() {
+    uint32_t now = millis();
+    
+    // 1. Si hay animación en curso, procesarla
+    if (current_animation != ANIM_NONE) {
+        uint32_t elapsed = now - anim_start_ms; //anim_timer
+        
+        if (current_animation == ANIM_ACTIVATING) {
+            // 5 destellos a 2Hz (período 500ms, toggle cada 250ms)
+            if (elapsed >= 250) {
+                anim_phase = !anim_phase;
+                digitalWrite(PIN_LED_LIMIT, anim_phase ? HIGH : LOW);
+                anim_start_ms = now; //anim_timer
+                
+                if (anim_phase) {
+                    anim_blink_count++; //anim_counter
+                    if (anim_blink_count >= 5) { //anim_counter
+                        current_animation = ANIM_NONE; 
+                        anim_blink_count = 0; //anim_counter
+                    }
+                }
+            }
+        }
+        else if (current_animation == ANIM_RELEASING) {
+            // Oscilación a 10Hz (50ms por fase) durante 1 segundo
+            if (elapsed < 1000) {
+                if (elapsed % 100 < 50) {
+                    digitalWrite(PIN_LED_LIMIT, HIGH);
+                } else {
+                    digitalWrite(PIN_LED_LIMIT, LOW);
+                }
+            } else {
+                current_animation = ANIM_NONE;
+            }
+        }
+        return;
+    }
+    
+}
+
+// Inicialización
+void motor_control_init() {
+    pinMode(PIN_HALL, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PIN_HALL), isr_hall, RISING);
+    pinMode(PIN_PEDAL, INPUT);
+    pinMode(PIN_PWM, OUTPUT);
+    pinMode(PIN_LED_LIMIT, OUTPUT);
+    
+    // Inicializar LEDs de límites
+    pinMode(PIN_LED_L1, OUTPUT);
+    pinMode(PIN_LED_L2, OUTPUT);
+    pinMode(PIN_LED_L3, OUTPUT);
+    pinMode(PIN_LED_L4, OUTPUT);
+    
+    // Apagar todos los LEDs al inicio
+    digitalWrite(PIN_LED_L1, LOW);
+    digitalWrite(PIN_LED_L2, LOW);
+    digitalWrite(PIN_LED_L3, LOW);
+    digitalWrite(PIN_LED_L4, LOW);
+    
+    //ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RES);
+    ledcAttach(PIN_PWM, PWM_FREQ, PWM_RES);
+    ledcWrite(PIN_PWM, 255); 
+    
+    Serial.println("[MOTOR] Sistema inicializado");
+}
+
+//  Función principal de actualización del motor
+void motor_update() {
+    // 1. Leer ADC del pedal
+    current_adc = analogRead(PIN_PEDAL);
+
+    // ---------------------------------------------------------
+   
+    // ADC 0 (Suelto)    -> PWM 0   (Parado)
+    // ADC 4095 (Fondo)  -> PWM 255 (Máximo)
+    // ---------------------------------------------------------
+    int pwm_val = map(current_adc, ADC_MIN, ADC_MAX, 0, PWM_MAX_DUTY);
+    
+    // Asegurar rangos (Clamping)
+    if (pwm_val < 0) pwm_val = 0;
+    if (pwm_val > PWM_MAX_DUTY) pwm_val = PWM_MAX_DUTY;
+
+    // ---------------------------------------------------------
+    
+    // Si hay límite y NO hay override, cortamos el máximo.
+    // ---------------------------------------------------------
+    if (current_limit_idx > 0 && !ovr_active) {
+        uint8_t pwm_cap = 255; // Por defecto sin límite
+
+        // Seleccionar el techo según el límite activo
+        switch(current_limit_idx) {
+            case 1: pwm_cap = PWM_CAP_L1; break;
+            case 2: pwm_cap = PWM_CAP_L2; break;
+            case 3: pwm_cap = PWM_CAP_L3; break;
+            case 4: pwm_cap = PWM_CAP_L4; break;
+        }
+
+        // LÓGICA DE RECORTE (Directa):
+        // Si el pedal pide más (ej. 255) que el techo (ej. 100),
+        // lo bajamos a la fuerza al techo.
+        if (pwm_val > pwm_cap) {
+            pwm_val = pwm_cap;
+        }
+    }
+
+    current_pwm = (uint8_t)pwm_val;
+    
+    // Escribir al motor
+    // (Usa la función que corresponda a tu versión de ESP32: ledcWrite canal o pin)
+    ledcWrite(PIN_PWM, current_pwm);
+    
+    // 5. Calcular velocidad desde sensor Hall
+    calcular_velocidad();
+    
+    // 6. Actualizar detección de doble tap
+    check_double_tap();
+    
+    
+    // 7. Actualizar LED de límite (con lógica de comparación PWM)
+    update_limit_led();
+}
+
+
+
+//  Aplicar límite recibido del Core 0
+void motor_set_limit(uint8_t limit_idx) {
+    if (limit_idx != current_limit_idx) {
+        Serial.printf("[LIMIT] Cambiando límite de %d a %d\\n", current_limit_idx, limit_idx);
+        
+        current_limit_idx = limit_idx;
+        
+        // Actualizar display (LEDs de indicador L1-L4)
+        disp_set_limit_indicator(limit_idx);
+        
+        // Si se activa un nuevo límite (no liberación), animación de activación
+        if (limit_idx > 0 && current_animation == ANIM_NONE) {
+            current_animation = ANIM_ACTIVATING;
+            anim_start_ms = millis(); //anim_timer
+            anim_blink_count = 0; //anim_counter
+        }
+        // Si se libera el límite (0), apagar inmediatamente
+        else if (limit_idx == 0) {
+            current_animation = ANIM_NONE;
+            digitalWrite(PIN_LED_LIMIT, LOW);
+            led_steady_state = false;
+        }
+    }
+}
+
+
+// FUNCIONES GETTER (para otros módulos)
+float motor_get_speed() {
+    return current_speed;
+}
+
+bool motor_is_override() {
+    return ovr_active;
+}
+
+uint16_t motor_get_adc() {
+    return current_adc;
+}
+
+uint8_t motor_get_pwm() {
+    return current_pwm;
+}

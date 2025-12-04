@@ -1,0 +1,17 @@
+flowchart TD
+    A["Iniciar"] --> B["Leer GPS"]
+    A --> C["Leer ABS"]
+    B --> D["Leer limites de la zona"]
+    C & D --> E{"¿Valor del ABS > Limite MAX Zona? 
+    (vel Auto > Zona)"}
+    E -- SI --> F["Activación de actuador segun la velocidad de la zona"]
+    F --> G{"¿El pedal es pisado a fondo 2 veces?"}
+    G -- NO --> H["Reducir 5% de la Máxima"]
+     --> J["Encender LEDs de alerta"]
+    J --> K["Mostrar mensaje en display"]
+    K --> L["Fin"]
+    G -- SI --> M["Inhibir sistema por tiempo determinado"]
+    M --> N["Esperar tiempo de inhibición"]
+    N --> A 
+    E -- NO --> O["Seguir"]
+    O --> L & A 

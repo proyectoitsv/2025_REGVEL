@@ -1,21 +1,17 @@
----
-config:
-  layout: elk
-  theme: neutral
-  look: classic
----
 flowchart TD
     A["Iniciar"] --> B["Leer GPS"]
-    B --> C["Leer Velocimetro"]
-    C --> D["Leer limites de la zona"]
-    D --> E{"¿señal de velocimetro > Limite MAX Zona? (vel Auto > Zona)"}
+    A --> C["Leer ABS"]
+    B --> D["Leer limites de la zona"]
+    C & D --> E{"¿Valor del ABS > Limite MAX Zona? 
+    (vel Auto > Zona)"}
     E -- SI --> F["Activación de actuador segun la velocidad de la zona"]
-    F --> G["Reducir 5% de la Máxima"]
-    G --> H["Fin"]
-    E -- NO --> I{"¿Señal de velocimetro > vel Min zona (vel auto > vel min zona)?"}
-    I -- NO --> J["Alarma Sonora"]
-    J --> K["Seguir"]
-    K --> H
-    I -- SI --> L{"¿Velocidad dentro de los limites?"}
-    L -- SI --> K
-    L -- NO --> J
+    F --> G{"¿El pedal es pisado a fondo 2 veces?"}
+    G -- NO --> H["Reducir 5% de la Máxima"]
+     --> J["Encender LEDs de alerta"]
+    J --> K["Mostrar mensaje en display"]
+    K --> L["Fin"]
+    G -- SI --> M["Inhibir sistema por tiempo determinado"]
+    M --> N["Esperar tiempo de inhibición"]
+    N --> A 
+    E -- NO --> O["Seguir"]
+    O --> L & A 

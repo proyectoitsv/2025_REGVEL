@@ -11,7 +11,7 @@
 #define MODE_NO_BT     3  // Solo Comandos Serial USB (0-4)
 
 // Modo de arranque por defecto
-#define DEFAULT_MODE   MODE_FULL 
+#define DEFAULT_MODE   MODE_NO_BT 
 
 // Comandos de Sistema (Serial / Bluetooth)
 #define CMD_SYS_NO_BT   '7'
@@ -49,12 +49,15 @@
 #define PWM_CHANNEL     0
 #define PWM_RES         8
 #define PWM_MAX_DUTY    255
-
+/*
+#define PWM_FREQ        5000    
+#define ADC_DBL_TAP_THR 3800
+*/
 #define ADC_MIN         0
-#define ADC_MAX         4095
-#define ADC_DBL_TAP_THR 3800  
+#define ADC_MAX         2800
+#define ADC_DBL_TAP_THR 2790  
 
-#define TAP_MIN_MS      200   
+#define TAP_MIN_MS      300   
 #define TAP_MAX_MS      800   
 #define TIME_OVR_L1     15
 #define TIME_OVR_L2     10
@@ -68,9 +71,9 @@
 
 // Límites de PWM (0-255) en Lógica Directa
 // Ajustar experimentalmente:
-#define PWM_LIM_1       200     // Muy Lento
-#define PWM_LIM_2       160     // Lento
-#define PWM_LIM_3       100     // Rápido
+#define PWM_LIM_1       120     // Muy Lento
+#define PWM_LIM_2       100     // Lento
+#define PWM_LIM_3       80     // Rápido
 #define PWM_LIM_4       50      // Muy Rápido
 
 // Frecuencias LED
@@ -78,11 +81,20 @@
 #define BLINK_OVR_MS    50      // 10Hz (50ms on / 50ms off)
 
 // =============================================================================
+// CONFIGURACIÓN BLUETOOTH MASTER (HC-05/HC-06)
+// =============================================================================
+// Reemplazar con la MAC de tu módulo HC-06
+#define BT_TARGET_MAC     {0x00, 0x22, 0x09, 0x01, 0x2C, 0x9E} 
+#define BT_MASTER_PIN     "1234"      // PIN por defecto del HC-06
+#define BT_RECONNECT_MS   10000       // Intentar reconexión cada 10 seg (No bloqueante)
+// =============================================================================
+
+// =============================================================================
 // 4. GEOMETRÍA
 // =============================================================================
 #define HALL_PULSES_REV 1
-#define WHEEL_RADIUS_MM 325
-#define WHEEL_CIRC_M    (2.0 * 3.14159 * 325.0 / 1000.0)
+#define WHEEL_RADIUS_MM 7000
+#define WHEEL_CIRC_M    (2.0 * 3.14159 * 7000.0 / 1000.0)
 
 struct IpcMsg {
     uint8_t limit_idx;

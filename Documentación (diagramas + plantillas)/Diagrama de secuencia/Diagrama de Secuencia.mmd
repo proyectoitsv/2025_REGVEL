@@ -2,28 +2,38 @@ sequenceDiagram
   participant Conductor as Conductor
   participant SistemaControl as SistemaControl
   participant GPS as GPS
-  participant Velocímetro as Velocímetro
+  participant ABS as ABS 
   participant Limitador as Limitador
 
-  loop Cada segundo
-    SistemaControl ->> Velocímetro: Solicitar velocidad
-    Velocímetro -->> SistemaControl: Velocidad actual (km/h)
-    SistemaControl ->> GPS: Solicitar ubicación
-    GPS -->> SistemaControl: Coordenadas + Tipo de vía
-    alt Tipo de vía reconocido
-      SistemaControl ->> SistemaControl: Calcular límite (40/60/110/130)
-    else Tipo desconocido
-      SistemaControl ->> SistemaControl: Usar límite predeterminado (40 km/h)
-    end
-    SistemaControl ->> SistemaControl: Comparar: velocidad vs límite
-    alt Velocidad > Límite
-      SistemaControl ->> Limitador: Activar()
-      SistemaControl ->> Conductor: Accionar el limite de Velocidad
-      Limitador -->> SistemaControl: Confirmación activación
-    else
-      SistemaControl ->> Limitador: Desactivar()
-      SistemaControl ->> Conductor: Detener el limitador de Velocidad
-    end
+  rect rgb(240, 248, 255)
+    SistemaControl ->> GPS: Leer GPS (ubicación)
+    SistemaControl ->> ABS: Leer ABS (velocidad)
   end
-
-
+  
+  SistemaControl ->> SistemaControl: Consultar límites de la zona
+  SistemaControl ->> SistemaControl: ¿ABS > Límite Máx. Zona?
+  
+  alt Sí: vel Auto > Zona
+    SistemaControl ->> Limitador: Activar actuador según velocidad zona
+    
+    SistemaControl ->> Conductor: Verificar doble pedal
+    
+    alt No: Doble pedal NO pisado
+      SistemaControl ->> Limitador: Reducir 5% de la Máxima
+      SistemaControl ->> Conductor: Encender LEDs de alerta
+      SistemaControl ->> Conductor: Mostrar mensaje en display
+      Limitador -->> SistemaControl: Confirmación reducción
+      SistemaControl ->> Conductor: Fin del ciclo
+      
+    else Sí: Doble pedal SÍ pisado
+      SistemaControl ->> SistemaControl: Inhibir sistema por tiempo determinado
+      SistemaControl ->> SistemaControl: Esperar tiempo de inhibición
+      SistemaControl ->> SistemaControl: Reiniciar a inicio
+    end
+    
+  else No: vel Auto ≤ Zona
+    SistemaControl ->> Conductor: Seguir normalmente
+    SistemaControl ->> SistemaControl: Fin del ciclo
+  end
+  
+  Note over SistemaControl: El ciclo se reinicia desde inicio

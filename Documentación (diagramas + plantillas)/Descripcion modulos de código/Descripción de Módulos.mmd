@@ -1,0 +1,76 @@
+---
+config:
+  layout: elk
+---
+classDiagram
+    direction TB
+    class RegVel {
+        <<Orquestador (Core 1)>>
+        +setup()
+        +loop()
+        -dispatch_messages()
+        -q_ipc: QueueHandle_t
+    }
+    
+    class bluetooth {
+        <<Comunicaciones (Core 0)>>
+        +bluetooth_init()
+        +bluetooth_update()
+        -nmea_buffer[256]: char
+        -parse_nmea()
+        -compare_zones()
+        Entrada: SerialBT ($GPRMC)
+    }
+    
+    class motor_control {
+        <<Controlador HW>>
+        +motor_init()
+        +motor_set_limit(limit_idx: int)
+        +motor_get_speed(): float
+        -override_state: enum
+        -pwm_ceiling: int
+        -led_animation()
+        Entradas: ADC (Pedal), GPIO (Hall)
+        Salidas: PWM (Motor), GPIO (LED Límite)
+    }
+    
+    class display {
+        <<Interfaz Visual>>
+        +display_init()
+        +display_update()
+        -bcd_pins[4]: int
+        -cathode_pins[3]: int
+        -multiplex_speed: int
+        Salidas: BCD (4511), Cátodos (Transistores NPN)
+    }
+    class ZONES {
+        <<PROGMEM>>
+        +latitudes[]: float
+        +longitudes[]: float
+        +speed_limits[]: int
+        +ZONE_COUNT: const int
+    }
+    class q_ipc {
+        <<Cola de Mensajes>>
+        +limit_idx: int
+        Método: xQueueOverwrite()
+        Método: xQueueReceive()
+    }
+    RegVel --> motor_control: "#include \"motor.h\""
+    RegVel --> display: "#include \"display.h\""
+    RegVel --> bluetooth: "#include \"bluetooth.h\""
+    bluetooth --> ZONES: Lee datos de zona
+    bluetooth --> q_ipc: xQueueOverwrite(limit_idx)
+    RegVel --> q_ipc: xQueueReceive(limit_idx)
+    RegVel --> motor_control: motor_set_limit()
+    motor_control --> display: motor_get_speed() [Feedback]
+    note for bluetooth "Parsea $GPRMC → Lat/Lon"
+    note for q_ipc "Transporte: Core 0 → Core 1"
+    note for motor_control "Ajusta techo PWM + Activa LED"
+    note for display "Multiplexado de 3 dígitos sin parpadeo"
+    class Legend {
+        <<Leyenda>>
+        Línea sólida: Dependencia (#include)
+        Línea punteada: Flujo de datos
+        ***Entrada/Salida: Hardware físico***
+    }

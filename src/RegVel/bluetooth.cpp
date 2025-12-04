@@ -22,6 +22,11 @@ static String nmea_buffer = "";
 static float last_lat = 0.0, last_lon = 0.0;
 static bool gps_fix = false;
 
+// Variables para gestión Master/Slave
+static uint8_t  target_mac[6] = BT_TARGET_MAC; // Definido en config.h
+static bool     is_bt_master_hw = false;       // Rastrea si el hardware está en modo Master
+static uint32_t last_reconnect_ms = 0;         // Timer para reintentos no bloqueantes
+
 // --- MAPA (PROGMEM) ---
 struct ZonePoint {
     double lat, lon;
@@ -53,13 +58,80 @@ double parse_coord(String raw, String dir) {
     return val;
 }
 
+
+void manage_bt_hardware() {
+    // CASO A: Estamos en MODO FULL -> Necesitamos ser MASTER
+    if (system_mode == MODE_FULL) {
+        // 1. Si el hardware no es Master, reiniciarlo como Master
+        if (!is_bt_master_hw) {
+            Serial.println("[BT] Cambiando HW a MASTER...");
+            SerialBT.end(); 
+            delay(100); // Pequeña pausa de seguridad para el stack BT
+            // Inicia como Master (true)
+            if(SerialBT.begin(BT_NAME, true)) {
+                SerialBT.setPin(BT_MASTER_PIN, 4); //SerialBT.setPin(BT_MASTER_PIN, 4);
+                is_bt_master_hw = true;
+                bt_connected = false;
+                Serial.println("[BT] HW Listo (Master). Buscando HC-06...");
+            } else {
+                Serial.println("[BT] Error iniciando modo Master");
+            }
+            return; // Esperar al siguiente ciclo para conectar
+        }
+
+        // 2. Si ya es Master pero no está conectado, intentar conectar periódicamente
+        if (!SerialBT.connected()) {
+            bt_connected = false;
+            uint32_t now = millis();
+            // Reintentar cada BT_RECONNECT_MS (ej. 10s)
+            if (now - last_reconnect_ms > BT_RECONNECT_MS) {
+                Serial.printf("[BT] Intentando conectar a MAC...\n");
+                // connect() es bloqueante (1-3s), pero al estar en Core 0
+                // NO afecta al motor (Core 1).
+                if (SerialBT.connect(target_mac)) {
+                    Serial.println("[BT] CONECTADO EXITOSAMENTE AL HC-06");
+                    bt_connected = true;
+                } else {
+                    Serial.println("[BT] Falló conexión. Reintento en 10s");
+                }
+                last_reconnect_ms = now;
+            }
+        } else {
+            // Ya conectado
+            bt_connected = true; 
+        }
+    }
+    // CASO B: NO estamos en MODO FULL -> Hardware como SLAVE (Comportamiento original)
+    else {
+        // Si estábamos en modo Master, volver a Slave
+        if (is_bt_master_hw) {
+            Serial.println("[BT] Liberando Master. Volviendo a SLAVE...");
+            SerialBT.disconnect();
+            SerialBT.end();
+            delay(100);
+            SerialBT.begin(BT_NAME); // Inicia como Slave (default)
+            is_bt_master_hw = false;
+            bt_connected = false;
+        }
+        // La gestión de bt_connected como Slave la hace bluetooth_update original
+    }
+}
+
 // --- Lógica Principal (Llamada por TaskCore0) ---
 bool bluetooth_update(uint8_t *detected_limit) {
     bool new_limit = false;
-    
-    // 1. Gestión de Conexión BT
-    if (SerialBT.hasClient()) bt_connected = true;
-    else bt_connected = false;
+
+    // 0. GESTIÓN DE HARDWARE (NUEVO)
+    // Revisa si hay que cambiar entre Master/Slave o reconectar
+    manage_bt_hardware();
+
+    // 1. Actualizar estado de conexión
+    if (!is_bt_master_hw) {
+        // MODO SLAVE (Parcial/NoBT): Usamos la detección estándar de cliente
+        if (SerialBT.hasClient()) bt_connected = true;
+        else bt_connected = false;
+    } 
+    // MODO MASTER (Full): bt_connected ya fue actualizado por manage_bt_hardware()
 
     // 2. Leer Serial USB (Cambio de Modo o Comandos)
     if (Serial.available()) {

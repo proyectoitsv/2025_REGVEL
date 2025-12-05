@@ -163,9 +163,9 @@ bool bluetooth_update(uint8_t *detected_limit) {
                 else if (nmea_buffer.startsWith("$GPRMC")) {
                     // Parser simple por comas
                     int idx = 0, comas = 0;
-                    String parts[7]; // Necesitamos hasta la longitud (idx 6)
+                    String parts[12]; // Necesitamos hasta la longitud (idx 6)
                     
-                    for (int i=0; i<nmea_buffer.length() && comas < 7; i++) {
+                    for (int i=0; i<nmea_buffer.length() && comas < 12; i++) {
                         if (nmea_buffer[i] == ',') { comas++; }
                         else if (comas >= 1) { parts[comas-1] += nmea_buffer[i]; } 
                         // parts[0]=time, [1]=status, [2]=lat, [3]=NS, [4]=lon, [5]=EW
@@ -213,17 +213,17 @@ bool bluetooth_update(uint8_t *detected_limit) {
         last_debug_ms = millis();
         
         // Info ADC/PWM (Siempre)
-        Serial.printf("[DEBUG] ADC: %d | PWM: %d | Modo: %d\n", 
-                      motor_get_adc(), motor_get_pwm(), system_mode);
+        Serial.printf("[DEBUG] ADC: %d | PWM: %d |  Vel: %5.1f km/h | Modo: %d\n", 
+                      motor_get_adc(), motor_get_pwm(), motor_get_speed(), system_mode);
         
         // Info GPS (Solo modo FULL)
         if (system_mode == MODE_FULL) {
-            Serial.printf("[GPS] Fix: %s | Lat: %.5f | Lon: %.5f\n", 
+            Serial.printf("[GPS] Fix: %s | Lat: %.5f | Lon: %.5f\n |", 
                           gps_fix ? "SI" : "NO", last_lat, last_lon);
             
             // Enviar también por BT si conectado
             if (bt_connected) {
-                SerialBT.printf("ADC:%d PWM:%d Fix:%d\n", motor_get_adc(), motor_get_pwm(), gps_fix);
+                SerialBT.printf("ADC:%d PWM:%d Fix:%d\n", motor_get_adc(), motor_get_pwm(),  gps_fix);
             }
         }
     }

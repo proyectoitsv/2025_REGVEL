@@ -93,8 +93,8 @@
 // 4. GEOMETRÍA
 // =============================================================================
 #define HALL_PULSES_REV 1
-#define WHEEL_RADIUS_MM 7000
-#define WHEEL_CIRC_M    (2.0 * 3.14159 * 7000.0 / 1000.0)
+#define WHEEL_RADIUS_MM 7
+#define WHEEL_CIRC_M    (3.14159 * 0.7 / 1000.0)
 
 struct IpcMsg {
     uint8_t limit_idx;
@@ -104,7 +104,7 @@ struct IpcMsg {
 // =============================================================================
 // 5. PARÁMETROS DE DISPLAY
 // =============================================================================
-#define SPEED_DISPLAY_MULT  2.0  // Multiplicador para simular velocidades altas
+#define SPEED_DISPLAY_MULT  1.0  // Multiplicador para simular velocidades altas
 #define SPEED_CALC_WINDOW_MS 100 // Ventana de cálculo de velocidad (ms)
 
 
